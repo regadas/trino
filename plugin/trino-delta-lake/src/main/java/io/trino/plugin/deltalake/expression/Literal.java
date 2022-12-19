@@ -13,27 +13,11 @@
  */
 package io.trino.plugin.deltalake.expression;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Strings.isNullOrEmpty;
-
-public class Literal
-        extends Expression
+public abstract class Literal
+        extends SparkExpression
 {
-    private final String value;
-
-    public Literal(String value)
-    {
-        checkArgument(!isNullOrEmpty(value), "value is null or empty");
-        this.value = value;
-    }
-
-    public String getValue()
-    {
-        return value;
-    }
-
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
+    public <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
         return visitor.visitLiteral(this, context);
     }

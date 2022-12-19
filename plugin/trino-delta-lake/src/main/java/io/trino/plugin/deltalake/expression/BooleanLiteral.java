@@ -13,22 +13,27 @@
  */
 package io.trino.plugin.deltalake.expression;
 
+import java.util.Objects;
+
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.util.Locale.ENGLISH;
+import static java.util.Objects.requireNonNull;
 
-public class Identifier
-        extends SparkExpression
+public class BooleanLiteral
+        extends Literal
 {
-    private final String value;
+    private final boolean value;
 
-    public Identifier(String value)
+    public BooleanLiteral(String value)
     {
-        checkArgument(!isNullOrEmpty(value), "value is null or empty");
-        this.value = value;
+        requireNonNull(value, "value is null");
+        checkArgument(value.toLowerCase(ENGLISH).equals("true") || value.toLowerCase(ENGLISH).equals("false"));
+
+        this.value = value.toLowerCase(ENGLISH).equals("true");
     }
 
-    public String getValue()
+    public boolean getValue()
     {
         return value;
     }
@@ -36,7 +41,26 @@ public class Identifier
     @Override
     public <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
-        return visitor.visitIdentifier(this, context);
+        return visitor.visitBooleanLiteral(this, context);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return Objects.hash(value);
+    }
+
+    @Override
+    public boolean equals(Object obj)
+    {
+        if (this == obj) {
+            return true;
+        }
+        if (obj == null || getClass() != obj.getClass()) {
+            return false;
+        }
+        BooleanLiteral other = (BooleanLiteral) obj;
+        return Objects.equals(this.value, other.value);
     }
 
     @Override

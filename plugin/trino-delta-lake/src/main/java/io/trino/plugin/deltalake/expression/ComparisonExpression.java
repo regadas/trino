@@ -15,16 +15,17 @@ package io.trino.plugin.deltalake.expression;
 
 import java.util.Objects;
 
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
 
 public class ComparisonExpression
-        extends Expression
+        extends SparkExpression
 {
     private final Operator operator;
-    private final Expression left;
-    private final Expression right;
+    private final SparkExpression left;
+    private final SparkExpression right;
 
-    public ComparisonExpression(Operator operator, Expression left, Expression right)
+    public ComparisonExpression(Operator operator, SparkExpression left, SparkExpression right)
     {
         requireNonNull(operator, "operator is null");
         requireNonNull(left, "left is null");
@@ -40,18 +41,18 @@ public class ComparisonExpression
         return operator;
     }
 
-    public Expression getLeft()
+    public SparkExpression getLeft()
     {
         return left;
     }
 
-    public Expression getRight()
+    public SparkExpression getRight()
     {
         return right;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
+    public <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
         return visitor.visitComparisonExpression(this, context);
     }
@@ -67,7 +68,7 @@ public class ComparisonExpression
         }
 
         ComparisonExpression that = (ComparisonExpression) o;
-        return (operator == that.operator) &&
+        return operator == that.operator &&
                 Objects.equals(left, that.left) &&
                 Objects.equals(right, that.right);
     }
@@ -76,6 +77,16 @@ public class ComparisonExpression
     public int hashCode()
     {
         return Objects.hash(operator, left, right);
+    }
+
+    @Override
+    public String toString()
+    {
+        return toStringHelper(this)
+                .add("operator", operator)
+                .add("left", left)
+                .add("right", right)
+                .toString();
     }
 
     public enum Operator

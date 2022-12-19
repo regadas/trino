@@ -13,22 +13,28 @@
  */
 package io.trino.plugin.deltalake.expression;
 
+import java.util.Objects;
+
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Strings.isNullOrEmpty;
+import static java.util.Objects.requireNonNull;
 
-public class Identifier
-        extends SparkExpression
+public class LongLiteral
+        extends Literal
 {
-    private final String value;
+    private final long value;
 
-    public Identifier(String value)
+    public LongLiteral(String value)
     {
-        checkArgument(!isNullOrEmpty(value), "value is null or empty");
-        this.value = value;
+        requireNonNull(value, "value is null");
+        try {
+            this.value = Long.parseLong(value);
+        }
+        catch (NumberFormatException e) {
+            throw new ParsingException("Invalid numeric literal: " + value);
+        }
     }
 
-    public String getValue()
+    public long getValue()
     {
         return value;
     }
@@ -36,7 +42,27 @@ public class Identifier
     @Override
     public <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
-        return visitor.visitIdentifier(this, context);
+        return visitor.visitLongLiteral(this, context);
+    }
+
+    @Override
+    public int hashCode()
+    {
+        return Objects.hash(value);
+    }
+
+    @Override
+    public boolean equals(Object o)
+    {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+
+        LongLiteral that = (LongLiteral) o;
+        return value == that.value;
     }
 
     @Override

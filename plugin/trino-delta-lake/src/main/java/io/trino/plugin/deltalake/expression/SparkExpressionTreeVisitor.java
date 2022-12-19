@@ -15,22 +15,14 @@ package io.trino.plugin.deltalake.expression;
 
 import javax.annotation.Nullable;
 
-public abstract class AstVisitor<R, C>
+public abstract class SparkExpressionTreeVisitor<R, C>
 {
-    public R process(Node node, @Nullable C context)
+    public R process(SparkExpression node, @Nullable C context)
     {
         return node.accept(this, context);
     }
 
-    protected R visitNode(Node node, C context)
-    {
-        return null;
-    }
-
-    protected R visitExpression(Expression node, C context)
-    {
-        return visitNode(node, context);
-    }
+    protected abstract R visitExpression(SparkExpression node, C context);
 
     protected R visitComparisonExpression(ComparisonExpression node, C context)
     {
@@ -47,13 +39,23 @@ public abstract class AstVisitor<R, C>
         return visitExpression(node, context);
     }
 
-    protected R visitStringLiteral(StringLiteral node, C context)
+    protected R visitLiteral(Literal node, C context)
+    {
+        return visitExpression(node, context);
+    }
+
+    protected R visitBooleanLiteral(BooleanLiteral node, C context)
     {
         return visitLiteral(node, context);
     }
 
-    protected R visitLiteral(Literal node, C context)
+    protected R visitLongLiteral(LongLiteral node, C context)
     {
-        return visitExpression(node, context);
+        return visitLiteral(node, context);
+    }
+
+    protected R visitStringLiteral(StringLiteral node, C context)
+    {
+        return visitLiteral(node, context);
     }
 }

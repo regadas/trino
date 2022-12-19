@@ -31,6 +31,7 @@ booleanExpression
     | booleanExpression AND booleanExpression           #and
     ;
 
+// TODO: Support LIKE clause and function calls
 // workaround for https://github.com/antlr/antlr4/issues/780
 predicate[ParserRuleContext value]
     : comparisonOperator right=valueExpression          #comparison
@@ -47,8 +48,9 @@ primaryExpression
     | identifier                                        #columnReference
     ;
 
+// TODO: Support raw string literal
 string
-    : STRING                                            #basicStringLiteral
+    : STRING                                            #unicodeStringLiteral
     ;
 
 comparisonOperator
@@ -59,11 +61,13 @@ booleanValue
     : TRUE | FALSE
     ;
 
+// "..." is a varchar literal in Spark SQL, not a quoted identifier
 identifier
     : IDENTIFIER             #unquotedIdentifier
     | BACKQUOTED_IDENTIFIER  #backQuotedIdentifier
     ;
 
+// TODO: Support decimals and scientific notation
 number
     : MINUS? INTEGER_VALUE  #integerLiteral
     ;
@@ -108,11 +112,4 @@ fragment LETTER
 
 WS
     : [ \r\n\t]+ -> channel(HIDDEN)
-    ;
-
-// Catch-all for anything we can't recognize.
-// We use this to be able to ignore and recover all the text
-// when splitting statements with DelimiterLexer
-UNRECOGNIZED
-    : .
     ;

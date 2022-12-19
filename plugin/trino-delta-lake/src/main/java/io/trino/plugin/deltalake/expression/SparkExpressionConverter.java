@@ -13,68 +13,58 @@
  */
 package io.trino.plugin.deltalake.expression;
 
-import static java.util.stream.Collectors.joining;
-
 public final class SparkExpressionConverter
 {
     private SparkExpressionConverter() {}
 
-    public static String toTrinoExpression(Expression expression)
+    public static String toTrinoExpression(SparkExpression expression)
     {
         return new Formatter().process(expression, null);
     }
 
     public static class Formatter
-            extends AstVisitor<String, Void>
+            extends SparkExpressionTreeVisitor<String, Void>
     {
         @Override
-        protected String visitNode(Node node, Void context)
+        protected String visitExpression(SparkExpression node, Void context)
         {
             throw new UnsupportedOperationException();
         }
 
         @Override
-        protected String visitIdentifier(Identifier node, Void context)
+        protected String visitComparisonExpression(ComparisonExpression node, Void context)
         {
-            return formatIdentifier(node.getValue());
+            return "(%s %s %s)".formatted(process(node.getLeft(), context), node.getOperator().getValue(), process(node.getRight(), context));
         }
 
-        private static String formatIdentifier(String s)
+        @Override
+        protected String visitLogicalExpression(LogicalExpression node, Void context)
         {
-            return '"' + s.replace("\"", "\"\"") + '"';
+            return "(%s %s %s)".formatted(process(node.getLeft(), context), node.getOperator().toString(), process(node.getRight(), context));
+        }
+
+        @Override
+        protected String visitIdentifier(Identifier node, Void context)
+        {
+            return '"' + node.getValue().replace("\"", "\"\"") + '"';
+        }
+
+        @Override
+        protected String visitBooleanLiteral(BooleanLiteral node, Void context)
+        {
+            return String.valueOf(node.getValue());
+        }
+
+        @Override
+        protected String visitLongLiteral(LongLiteral node, Void context)
+        {
+            return String.valueOf(node.getValue());
         }
 
         @Override
         protected String visitStringLiteral(StringLiteral node, Void context)
         {
             return "'" + node.getValue().replace("'", "''") + "'";
-        }
-
-        @Override
-        protected String visitLiteral(Literal node, Void context)
-        {
-            return node.getValue();
-        }
-
-        @Override
-        protected String visitComparisonExpression(ComparisonExpression node, Void context)
-        {
-            return formatBinaryExpression(node.getOperator().getValue(), node.getLeft(), node.getRight());
-        }
-
-        @Override
-        protected String visitLogicalExpression(LogicalExpression node, Void context)
-        {
-            return "(" +
-                    node.getTerms().stream()
-                            .map(term -> process(term, context))
-                            .collect(joining(" " + node.getOperator().toString() + " ")) +
-                    ")";
-        }
-
-        private String formatBinaryExpression(String operator, Expression left, Expression right)
-        {
-            return '(' + process(left, null) + ' ' + operator + ' ' + process(right, null) + ')';
         }
     }
 }

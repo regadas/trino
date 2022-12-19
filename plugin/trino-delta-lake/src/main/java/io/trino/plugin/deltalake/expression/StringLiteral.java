@@ -15,6 +15,7 @@ package io.trino.plugin.deltalake.expression;
 
 import java.util.Objects;
 
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
 
 public class StringLiteral
@@ -24,13 +25,17 @@ public class StringLiteral
 
     public StringLiteral(String value)
     {
-        super(value);
         requireNonNull(value, "value is null");
         this.value = value;
     }
 
+    public String getValue()
+    {
+        return value;
+    }
+
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
+    public <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
         return visitor.visitStringLiteral(this, context);
     }
@@ -53,5 +58,13 @@ public class StringLiteral
     public int hashCode()
     {
         return value.hashCode();
+    }
+
+    @Override
+    public String toString()
+    {
+        return toStringHelper(this)
+                .add("value", value)
+                .toString();
     }
 }

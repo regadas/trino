@@ -25,76 +25,86 @@ public class TestSparkExpressions
     @Test
     public void testBoolean()
     {
-        assertExpression("a = true", "(\"a\" = true)");
+        assertExpressionTranslates("a = true", "(\"a\" = true)");
+        assertExpressionTranslates("true", "true");
     }
 
     @Test
     public void testString()
     {
+        assertExpressionTranslates("a = 'test'", "(\"a\" = 'test')");
+
+        // Spark uses 16-bit or 32-bit unicode escape of the form \\u**** or \\U********
+        assertExpressionTranslates("a = '\\u3042'", "(\"a\" = 'あ')");
+        assertExpressionTranslates("a = '\\U0001F44D'", "(\"a\" = '👍')");
+
         // Spark supports both ' and " for string literals
-        assertExpression("a = 'quote'", "(\"a\" = 'quote')");
-        assertExpression("a = 'a''quote'", "(\"a\" = 'a''quote')");
-        assertExpression("a = \"double-quote\"", "(\"a\" = 'double-quote')");
-        assertExpression("a = \"a\"\"double-quote\"", "(\"a\" = 'a\"double-quote')");
+        assertExpressionTranslates("a = 'quote'", "(\"a\" = 'quote')");
+        assertExpressionTranslates("a = 'a''quote'", "(\"a\" = 'a''quote')");
+        assertExpressionTranslates("a = \"double-quote\"", "(\"a\" = 'double-quote')");
+        assertExpressionTranslates("a = \"a\"\"double-quote\"", "(\"a\" = 'a\"double-quote')");
+
+        // TODO: Support non-hexadecimal special characters. \n should insert a new empty line
+        assertParseFailure("a = 'a\\nwrap'");
     }
 
     @Test
     public void testNumber()
     {
-        assertExpression("a = -1", "(\"a\" = -1)");
+        assertExpressionTranslates("a = -1", "(\"a\" = -1)");
     }
 
     @Test
     public void testEquals()
     {
-        assertExpression("a = 1", "(\"a\" = 1)");
-        assertExpression("a = 'test'", "(\"a\" = 'test')");
+        assertExpressionTranslates("a = 1", "(\"a\" = 1)");
+        assertExpressionTranslates("a = 'test'", "(\"a\" = 'test')");
     }
 
     @Test
     public void testNotEquals()
     {
-        assertExpression("a <> 1", "(\"a\" <> 1)");
-        assertExpression("a != 1", "(\"a\" <> 1)");
+        assertExpressionTranslates("a <> 1", "(\"a\" <> 1)");
+        assertExpressionTranslates("a != 1", "(\"a\" <> 1)");
     }
 
     @Test
     public void testLessThan()
     {
-        assertExpression("a < 1", "(\"a\" < 1)");
+        assertExpressionTranslates("a < 1", "(\"a\" < 1)");
     }
 
     @Test
     public void testLessThanOrEquals()
     {
-        assertExpression("a <= 1", "(\"a\" <= 1)");
+        assertExpressionTranslates("a <= 1", "(\"a\" <= 1)");
     }
 
     @Test
     public void testGraterThan()
     {
-        assertExpression("a > 1", "(\"a\" > 1)");
+        assertExpressionTranslates("a > 1", "(\"a\" > 1)");
     }
 
     @Test
     public void testGraterThanOrEquals()
     {
-        assertExpression("a >= 1", "(\"a\" >= 1)");
+        assertExpressionTranslates("a >= 1", "(\"a\" >= 1)");
     }
 
     @Test
     public void testAnd()
     {
-        assertExpression("a > 1 AND a < 10", "((\"a\" > 1) AND (\"a\" < 10))");
+        assertExpressionTranslates("a > 1 AND a < 10", "((\"a\" > 1) AND (\"a\" < 10))");
     }
 
     @Test
     public void testIdentifier()
     {
         // Spark uses ` for identifiers
-        assertExpression("`123` = 1", "(\"123\" = 1)");
-        assertExpression("`a.dot` = 1", "(\"a.dot\" = 1)");
-        assertExpression("`a``backtick` = 1", "(\"a`backtick\" = 1)");
+        assertExpressionTranslates("`123` = 1", "(\"123\" = 1)");
+        assertExpressionTranslates("`a.dot` = 1", "(\"a.dot\" = 1)");
+        assertExpressionTranslates("`a``backtick` = 1", "(\"a`backtick\" = 1)");
     }
 
     @Test
@@ -167,7 +177,7 @@ public class TestSparkExpressions
         assertParseFailure("a = abs(-1)");
     }
 
-    private static void assertExpression(@Language("SQL") String sparkExpression, @Language("SQL") String trinoExpression)
+    private static void assertExpressionTranslates(@Language("SQL") String sparkExpression, @Language("SQL") String trinoExpression)
     {
         assertEquals(toTrinoExpression(sparkExpression), trinoExpression);
     }

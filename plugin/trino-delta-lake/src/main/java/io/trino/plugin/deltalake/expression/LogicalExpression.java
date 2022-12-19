@@ -13,16 +13,13 @@
  */
 package io.trino.plugin.deltalake.expression;
 
-import com.google.common.collect.ImmutableList;
-
-import java.util.List;
 import java.util.Objects;
 
-import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.MoreObjects.toStringHelper;
 import static java.util.Objects.requireNonNull;
 
 public class LogicalExpression
-        extends Expression
+        extends SparkExpression
 {
     public enum Operator
     {
@@ -30,15 +27,16 @@ public class LogicalExpression
     }
 
     private final Operator operator;
-    private final List<Expression> terms;
+    private final SparkExpression left;
+    private final SparkExpression right;
 
-    public LogicalExpression(Operator operator, List<Expression> terms)
+    public LogicalExpression(Operator operator, SparkExpression left, SparkExpression right)
     {
         requireNonNull(operator, "operator is null");
-        checkArgument(terms.size() >= 2, "Expected at least 2 terms");
 
         this.operator = operator;
-        this.terms = ImmutableList.copyOf(terms);
+        this.left = requireNonNull(left, "left is null");
+        this.right = requireNonNull(right, "right is null");
     }
 
     public Operator getOperator()
@@ -46,13 +44,18 @@ public class LogicalExpression
         return operator;
     }
 
-    public List<Expression> getTerms()
+    public SparkExpression getLeft()
     {
-        return terms;
+        return left;
+    }
+
+    public SparkExpression getRight()
+    {
+        return right;
     }
 
     @Override
-    public <R, C> R accept(AstVisitor<R, C> visitor, C context)
+    public <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
         return visitor.visitLogicalExpression(this, context);
     }
@@ -67,12 +70,24 @@ public class LogicalExpression
             return false;
         }
         LogicalExpression that = (LogicalExpression) o;
-        return operator == that.operator && Objects.equals(terms, that.terms);
+        return operator == that.operator &&
+                Objects.equals(left, that.left) &&
+                Objects.equals(right, that.right);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(operator, terms);
+        return Objects.hash(operator, left, right);
+    }
+
+    @Override
+    public String toString()
+    {
+        return toStringHelper(this)
+                .add("operator", operator)
+                .add("left", left)
+                .add("right", right)
+                .toString();
     }
 }

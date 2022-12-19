@@ -34,7 +34,7 @@ public final class SparkExpressions
         @Override
         public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String message, RecognitionException e)
         {
-            throw new ParsingException(message, e, line, charPositionInLine + 1);
+            throw new ParsingException(message, e);
         }
     };
 
@@ -43,7 +43,7 @@ public final class SparkExpressions
     public static String toTrinoExpression(String sparkExpression)
     {
         try {
-            Expression expression = createExpression(sparkExpression);
+            SparkExpression expression = createExpression(sparkExpression);
             return SparkExpressionConverter.toTrinoExpression(expression);
         }
         catch (ParsingException e) {
@@ -51,9 +51,9 @@ public final class SparkExpressions
         }
     }
 
-    private static Expression createExpression(String expressionPattern)
+    private static SparkExpression createExpression(String expressionPattern)
     {
-        return (Expression) invokeParser(expressionPattern, SparkExpressionParser::standaloneExpression);
+        return (SparkExpression) invokeParser(expressionPattern, SparkExpressionParser::standaloneExpression);
     }
 
     private static Object invokeParser(String input, Function<SparkExpressionParser, ParserRuleContext> parseFunction)

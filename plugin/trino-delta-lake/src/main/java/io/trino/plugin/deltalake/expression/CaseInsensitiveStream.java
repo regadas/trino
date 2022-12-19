@@ -17,6 +17,8 @@ import org.antlr.v4.runtime.CharStream;
 import org.antlr.v4.runtime.IntStream;
 import org.antlr.v4.runtime.misc.Interval;
 
+import static java.util.Objects.requireNonNull;
+
 public class CaseInsensitiveStream
         implements CharStream
 {
@@ -24,7 +26,7 @@ public class CaseInsensitiveStream
 
     public CaseInsensitiveStream(CharStream stream)
     {
-        this.stream = stream;
+        this.stream = requireNonNull(stream, "stream is null");
     }
 
     @Override

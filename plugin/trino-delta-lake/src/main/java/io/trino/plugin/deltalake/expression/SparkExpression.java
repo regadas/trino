@@ -13,18 +13,13 @@
  */
 package io.trino.plugin.deltalake.expression;
 
-public abstract class Expression
-        extends Node
+public abstract class SparkExpression
 {
-    @Override
-    protected <R, C> R accept(AstVisitor<R, C> visitor, C context)
+    protected <R, C> R accept(SparkExpressionTreeVisitor<R, C> visitor, C context)
     {
         return visitor.visitExpression(this, context);
     }
 
     @Override
-    public final String toString()
-    {
-        return SparkExpressionConverter.toTrinoExpression(this);
-    }
+    public abstract String toString();
 }

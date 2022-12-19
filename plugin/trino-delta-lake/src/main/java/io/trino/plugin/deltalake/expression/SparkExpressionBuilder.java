@@ -17,20 +17,15 @@ import org.antlr.v4.runtime.ParserRuleContext;
 import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.tree.TerminalNode;
 
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
-import java.util.List;
-import java.util.Optional;
-import java.util.function.Function;
-
-import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.base.Verify.verify;
 import static java.lang.String.format;
+import static java.util.HexFormat.isHexDigit;
 
 public class SparkExpressionBuilder
         extends SparkExpressionBaseVisitor<Object>
 {
-    public SparkExpressionBuilder() {}
+    private static final char SPARK_ESCAPE_CHARACTER = '\\';
 
     @Override
     public Object visitStandaloneExpression(SparkExpressionParser.StandaloneExpressionContext context)
@@ -39,18 +34,14 @@ public class SparkExpressionBuilder
     }
 
     @Override
-    public Object visitExpression(SparkExpressionParser.ExpressionContext context)
-    {
-        return super.visitExpression(context);
-    }
-
-    @Override
     public Object visitPredicated(SparkExpressionParser.PredicatedContext context)
     {
+        // Handle comparison operator
         if (context.predicate() != null) {
             return visit(context.predicate());
         }
 
+        // Handle simple expression likes just TRUE
         return visit(context.valueExpression);
     }
 
@@ -59,46 +50,15 @@ public class SparkExpressionBuilder
     {
         return new ComparisonExpression(
                 getComparisonOperator(((TerminalNode) context.comparisonOperator().getChild(0)).getSymbol()),
-                (Expression) visit(context.value),
-                (Expression) visit(context.right));
+                (SparkExpression) visit(context.value),
+                (SparkExpression) visit(context.right));
     }
 
     @Override
-    public Node visitAnd(SparkExpressionParser.AndContext context)
+    public SparkExpression visitAnd(SparkExpressionParser.AndContext context)
     {
-        List<ParserRuleContext> terms = flatten(context, element -> {
-            if (element instanceof SparkExpressionParser.AndContext) {
-                SparkExpressionParser.AndContext and = (SparkExpressionParser.AndContext) element;
-                return Optional.of(and.booleanExpression());
-            }
-
-            return Optional.empty();
-        });
-
-        return new LogicalExpression(LogicalExpression.Operator.AND, visit(terms, Expression.class));
-    }
-
-    private static List<ParserRuleContext> flatten(ParserRuleContext root, Function<ParserRuleContext, Optional<List<? extends ParserRuleContext>>> extractChildren)
-    {
-        List<ParserRuleContext> result = new ArrayList<>();
-        Deque<ParserRuleContext> pending = new ArrayDeque<>();
-        pending.push(root);
-
-        while (!pending.isEmpty()) {
-            ParserRuleContext next = pending.pop();
-
-            Optional<List<? extends ParserRuleContext>> children = extractChildren.apply(next);
-            if (!children.isPresent()) {
-                result.add(next);
-            }
-            else {
-                for (int i = children.get().size() - 1; i >= 0; i--) {
-                    pending.push(children.get().get(i));
-                }
-            }
-        }
-
-        return result;
+        verify(context.booleanExpression().size() == 2, "AND operator expects two expressions: " + context.booleanExpression());
+        return new LogicalExpression(LogicalExpression.Operator.AND, visit(context.booleanExpression(0), SparkExpression.class), visit(context.booleanExpression(1), SparkExpression.class));
     }
 
     @Override
@@ -130,32 +90,114 @@ public class SparkExpressionBuilder
     @Override
     public Object visitBooleanLiteral(SparkExpressionParser.BooleanLiteralContext context)
     {
-        return new Literal(context.getText());
+        return new BooleanLiteral(context.getText());
     }
 
     @Override
-    public Node visitIntegerLiteral(SparkExpressionParser.IntegerLiteralContext context)
+    public SparkExpression visitIntegerLiteral(SparkExpressionParser.IntegerLiteralContext context)
     {
-        return new Literal(context.getText());
+        return new LongLiteral(context.getText());
     }
 
     @Override
-    public Object visitBasicStringLiteral(SparkExpressionParser.BasicStringLiteralContext context)
+    public Object visitUnicodeStringLiteral(SparkExpressionParser.UnicodeStringLiteralContext context)
     {
-        String token = context.getText();
-        if (token.startsWith("\"") && token.endsWith("\"")) {
-            token = token.substring(1, token.length() - 1)
+        return new StringLiteral(decodeUnicodeLiteral(context));
+    }
+
+    private static String decodeUnicodeLiteral(SparkExpressionParser.UnicodeStringLiteralContext context)
+    {
+        String rawContent = unquote(context.getText());
+        StringBuilder unicodeStringBuilder = new StringBuilder();
+        StringBuilder escapedCharacterBuilder = new StringBuilder();
+        int charactersNeeded = 0;
+        UnicodeDecodeState state = UnicodeDecodeState.EMPTY;
+        for (int i = 0; i < rawContent.length(); i++) {
+            char ch = rawContent.charAt(i);
+            switch (state) {
+                case EMPTY:
+                    if (ch == SPARK_ESCAPE_CHARACTER) {
+                        state = UnicodeDecodeState.ESCAPED;
+                    }
+                    else {
+                        unicodeStringBuilder.append(ch);
+                    }
+                    break;
+                case ESCAPED:
+                    if (ch == SPARK_ESCAPE_CHARACTER) {
+                        unicodeStringBuilder.append(SPARK_ESCAPE_CHARACTER);
+                        state = UnicodeDecodeState.EMPTY;
+                    }
+                    else if (ch == 'u') {
+                        state = UnicodeDecodeState.UNICODE_SEQUENCE;
+                        charactersNeeded = 4;
+                    }
+                    else if (ch == 'U') {
+                        state = UnicodeDecodeState.UNICODE_SEQUENCE;
+                        charactersNeeded = 8;
+                    }
+                    else if (isHexDigit(ch)) {
+                        state = UnicodeDecodeState.UNICODE_SEQUENCE;
+                        escapedCharacterBuilder.append(ch);
+                    }
+                    else {
+                        throw new ParsingException("Invalid hexadecimal digit: " + ch);
+                    }
+                    break;
+                case UNICODE_SEQUENCE:
+                    checkState(isHexDigit(ch), "Incomplete escape sequence: " + escapedCharacterBuilder, context);
+                    escapedCharacterBuilder.append(ch);
+                    if (charactersNeeded == escapedCharacterBuilder.length()) {
+                        String currentEscapedCode = escapedCharacterBuilder.toString();
+                        escapedCharacterBuilder.setLength(0);
+                        int codePoint = Integer.parseInt(currentEscapedCode, 16);
+                        checkState(Character.isValidCodePoint(codePoint), "Invalid escaped character: " + currentEscapedCode, context);
+                        if (Character.isSupplementaryCodePoint(codePoint)) {
+                            unicodeStringBuilder.appendCodePoint(codePoint);
+                        }
+                        else {
+                            char currentCodePoint = (char) codePoint;
+                            checkState(!Character.isSurrogate(currentCodePoint), format("Invalid escaped character: %s. Escaped character is a surrogate. Use '\\+123456' instead.", currentEscapedCode), context);
+                            unicodeStringBuilder.append(currentCodePoint);
+                        }
+                        state = UnicodeDecodeState.EMPTY;
+                        charactersNeeded = -1;
+                    }
+                    else {
+                        checkState(charactersNeeded > escapedCharacterBuilder.length(), "Unexpected escape sequence length: " + escapedCharacterBuilder.length(), context);
+                    }
+                    break;
+                default:
+                    throw new UnsupportedOperationException();
+            }
+        }
+
+        checkState(state == UnicodeDecodeState.EMPTY, "Incomplete escape sequence: " + escapedCharacterBuilder, context);
+        return unicodeStringBuilder.toString();
+    }
+
+    private static String unquote(String value)
+    {
+        if (value.startsWith("\"") && value.endsWith("\"")) {
+            return value.substring(1, value.length() - 1)
                     .replace("\"\"", "\"");
         }
-        if (token.startsWith("'") && token.endsWith("'")) {
-            token = token.substring(1, token.length() - 1)
+        if (value.startsWith("'") && value.endsWith("'")) {
+            return value.substring(1, value.length() - 1)
                     .replace("''", "'");
         }
-        return new StringLiteral(token);
+        return value;
+    }
+
+    private enum UnicodeDecodeState
+    {
+        EMPTY,
+        ESCAPED,
+        UNICODE_SEQUENCE
     }
 
     @Override
-    public Node visitUnquotedIdentifier(SparkExpressionParser.UnquotedIdentifierContext context)
+    public SparkExpression visitUnquotedIdentifier(SparkExpressionParser.UnquotedIdentifierContext context)
     {
         return new Identifier(context.getText());
     }
@@ -167,13 +209,6 @@ public class SparkExpressionBuilder
         String identifier = token.substring(1, token.length() - 1)
                 .replace("``", "`");
         return new Identifier(identifier);
-    }
-
-    private <T> List<T> visit(List<? extends ParserRuleContext> contexts, Class<T> expected)
-    {
-        return contexts.stream()
-                .map(context -> this.visit(context, expected))
-                .collect(toImmutableList());
     }
 
     private <T> T visit(ParserRuleContext context, Class<T> expected)
