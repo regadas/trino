@@ -40,6 +40,7 @@ import io.trino.plugin.deltalake.statistics.ExtendedStatistics;
 import io.trino.plugin.deltalake.statistics.ExtendedStatisticsAccess;
 import io.trino.plugin.deltalake.transactionlog.AddFileEntry;
 import io.trino.plugin.deltalake.transactionlog.CommitInfoEntry;
+import io.trino.plugin.deltalake.transactionlog.DeltaLakeSchemaSupport.ColumnMappingMode;
 import io.trino.plugin.deltalake.transactionlog.MetadataEntry;
 import io.trino.plugin.deltalake.transactionlog.MetadataEntry.Format;
 import io.trino.plugin.deltalake.transactionlog.ProtocolEntry;
@@ -261,6 +262,7 @@ public class DeltaLakeMetadata
     public static final String CREATE_TABLE_AS_OPERATION = "CREATE TABLE AS SELECT";
     public static final String CREATE_TABLE_OPERATION = "CREATE TABLE";
     public static final String ADD_COLUMN_OPERATION = "ADD COLUMNS";
+    public static final String DROP_COLUMN_OPERATION = "DROP COLUMNS";
     public static final String INSERT_OPERATION = "WRITE";
     public static final String MERGE_OPERATION = "MERGE";
     public static final String OPTIMIZE_OPERATION = "OPTIMIZE";
@@ -1183,6 +1185,63 @@ public class DeltaLakeMetadata
         }
         catch (Exception e) {
             throw new TrinoException(DELTA_LAKE_BAD_WRITE, format("Unable to add '%s' column for: %s.%s", newColumnMetadata.getName(), handle.getSchemaName(), handle.getTableName()), e);
+        }
+    }
+
+    @Override
+    public void dropColumn(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
+    {
+        DeltaLakeTableHandle table = (DeltaLakeTableHandle) tableHandle;
+        DeltaLakeColumnHandle deltaLakeColumn = (DeltaLakeColumnHandle) columnHandle;
+        String dropColumnName = deltaLakeColumn.getName();
+
+        ColumnMappingMode columnMappingMode = getColumnMappingMode(table.getMetadataEntry());
+        if (columnMappingMode != ColumnMappingMode.NAME && columnMappingMode != ColumnMappingMode.ID) {
+            throw new TrinoException(NOT_SUPPORTED, "Cannot drop column with the column mapping: " + columnMappingMode);
+        }
+
+        ConnectorTableMetadata tableMetadata = getTableMetadata(session, table);
+        long commitVersion = table.getReadVersion() + 1;
+        List<String> partitionColumns = getPartitionedBy(tableMetadata.getProperties());
+        if (partitionColumns.contains(dropColumnName)) {
+            throw new TrinoException(NOT_SUPPORTED, "Cannot drop partition column: " + dropColumnName);
+        }
+
+        List<DeltaLakeColumnHandle> columns = tableMetadata.getColumns().stream()
+                .filter(column -> !column.isHidden() && !column.getName().equals(dropColumnName))
+                .map(column -> toColumnHandle(column, column.getName(), column.getType(), partitionColumns))
+                .collect(toImmutableList());
+        Map<String, String> columnComments = getColumnComments(table.getMetadataEntry()).entrySet().stream()
+                .filter(column -> !column.getKey().equals(dropColumnName))
+                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
+        Map<String, Boolean> columnsNullability = getColumnsNullability(table.getMetadataEntry()).entrySet().stream()
+                .filter(column -> !column.getKey().equals(dropColumnName))
+                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
+        Map<String, Map<String, Object>> columnMetadata = getColumnsMetadata(table.getMetadataEntry()).entrySet().stream()
+                .filter(column -> !column.getKey().equals(dropColumnName))
+                .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue));
+        try {
+            TransactionLogWriter transactionLogWriter = transactionLogWriterFactory.newWriter(session, table.getLocation());
+            appendTableEntries(
+                    commitVersion,
+                    transactionLogWriter,
+                    table.getMetadataEntry().getId(),
+                    columns,
+                    partitionColumns,
+                    columnComments,
+                    columnsNullability,
+                    columnMetadata,
+                    table.getMetadataEntry().getConfiguration(),
+                    DROP_COLUMN_OPERATION,
+                    session,
+                    nodeVersion,
+                    nodeId,
+                    Optional.ofNullable(table.getMetadataEntry().getDescription()),
+                    getProtocolEntry(session, table.getSchemaTableName()));
+            transactionLogWriter.flush();
+        }
+        catch (Exception e) {
+            throw new TrinoException(DELTA_LAKE_BAD_WRITE, format("Unable to drop '%s' column from: %s.%s", dropColumnName, table.getSchemaName(), table.getTableName()), e);
         }
     }
 
