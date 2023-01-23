@@ -233,4 +233,11 @@ public abstract class BaseIcebergMinioConnectorSmokeTest
                 .getTable(schemaName, tableName).orElseThrow()
                 .getParameters().get("metadata_location");
     }
+
+    @Override
+    protected void deleteDirectory(String location)
+    {
+        String prefix = "s3://" + bucketName + "/";
+        hiveMinioDataLake.getMinioClient().removeObject(bucketName, location.substring(prefix.length()));
+    }
 }

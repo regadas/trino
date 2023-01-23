@@ -217,6 +217,15 @@ public class TestIcebergGlueCatalogConnectorSmokeTest
                 .getParameters().get("metadata_location");
     }
 
+    @Override
+    protected void deleteDirectory(String location)
+    {
+        AmazonS3 s3 = AmazonS3ClientBuilder.standard().build();
+
+        String prefix = "s3://" + bucketName + "/";
+        s3.deleteObject(bucketName, location.substring(prefix.length()));
+    }
+
     private String schemaPath()
     {
         return format("s3://%s/%s", bucketName, schemaName);

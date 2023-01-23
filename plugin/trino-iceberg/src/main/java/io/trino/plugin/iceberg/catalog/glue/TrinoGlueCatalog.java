@@ -41,6 +41,7 @@ import io.trino.plugin.hive.SchemaAlreadyExistsException;
 import io.trino.plugin.hive.TrinoViewUtil;
 import io.trino.plugin.hive.ViewAlreadyExistsException;
 import io.trino.plugin.hive.metastore.glue.GlueMetastoreStats;
+import io.trino.plugin.iceberg.UnknownTableTypeException;
 import io.trino.plugin.iceberg.catalog.AbstractTrinoCatalog;
 import io.trino.plugin.iceberg.catalog.IcebergTableOperationsProvider;
 import io.trino.spi.TrinoException;
@@ -347,12 +348,7 @@ public class TrinoGlueCatalog
     {
         BaseTable table = (BaseTable) loadTable(session, schemaTableName);
         validateTableCanBeDropped(table);
-        try {
-            deleteTable(schemaTableName.getSchemaName(), schemaTableName.getTableName());
-        }
-        catch (AmazonServiceException e) {
-            throw new TrinoException(HIVE_METASTORE_ERROR, e);
-        }
+        unregisterTable(session, schemaTableName);
         dropTableData(table.io(), table.operations().current());
         deleteTableDirectory(fileSystemFactory.create(session), schemaTableName, table.location());
     }
@@ -382,6 +378,23 @@ public class TrinoGlueCatalog
     {
         TableInput tableInput = getTableInput(schemaTableName.getTableName(), Optional.of(session.getUser()), ImmutableMap.of(METADATA_LOCATION_PROP, metadataLocation));
         createTable(schemaTableName.getSchemaName(), tableInput);
+    }
+
+    @Override
+    public void unregisterTable(ConnectorSession session, SchemaTableName schemaTableName)
+    {
+        com.amazonaws.services.glue.model.Table table = getTable(session, schemaTableName)
+                .orElseThrow(() -> new TableNotFoundException(schemaTableName));
+        if (!isIcebergTable(firstNonNull(table.getParameters(), ImmutableMap.of()))) {
+            throw new UnknownTableTypeException(schemaTableName);
+        }
+
+        try {
+            deleteTable(schemaTableName.getSchemaName(), schemaTableName.getTableName());
+        }
+        catch (AmazonServiceException e) {
+            throw new TrinoException(HIVE_METASTORE_ERROR, e);
+        }
     }
 
     @Override

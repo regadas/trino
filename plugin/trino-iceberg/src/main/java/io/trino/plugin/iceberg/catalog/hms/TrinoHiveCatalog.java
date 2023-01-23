@@ -28,6 +28,7 @@ import io.trino.plugin.hive.metastore.MetastoreUtil;
 import io.trino.plugin.hive.metastore.PrincipalPrivileges;
 import io.trino.plugin.hive.metastore.cache.CachingHiveMetastore;
 import io.trino.plugin.hive.util.HiveUtil;
+import io.trino.plugin.iceberg.UnknownTableTypeException;
 import io.trino.plugin.iceberg.catalog.AbstractTrinoCatalog;
 import io.trino.plugin.iceberg.catalog.IcebergTableOperationsProvider;
 import io.trino.spi.TrinoException;
@@ -290,6 +291,21 @@ public class TrinoHiveCatalog
     }
 
     @Override
+    public void unregisterTable(ConnectorSession session, SchemaTableName schemaTableName)
+    {
+        io.trino.plugin.hive.metastore.Table table = metastore.getTable(schemaTableName.getSchemaName(), schemaTableName.getTableName())
+                .orElseThrow(() -> new TableNotFoundException(schemaTableName));
+        if (!isIcebergTable(table)) {
+            throw new UnknownTableTypeException(schemaTableName);
+        }
+
+        metastore.dropTable(
+                schemaTableName.getSchemaName(),
+                schemaTableName.getTableName(),
+                false /* do not delete data */);
+    }
+
+    @Override
     public List<SchemaTableName> listTables(ConnectorSession session, Optional<String> namespace)
     {
         ImmutableSet.Builder<SchemaTableName> tablesListBuilder = ImmutableSet.builder();
@@ -308,10 +324,7 @@ public class TrinoHiveCatalog
 
         io.trino.plugin.hive.metastore.Table metastoreTable = metastore.getTable(schemaTableName.getSchemaName(), schemaTableName.getTableName())
                 .orElseThrow(() -> new TableNotFoundException(schemaTableName));
-        metastore.dropTable(
-                schemaTableName.getSchemaName(),
-                schemaTableName.getTableName(),
-                false /* do not delete data */);
+        unregisterTable(session, schemaTableName);
         // Use the Iceberg routine for dropping the table data because the data files
         // of the Iceberg table may be located in different locations
         dropTableData(table.io(), metadata);
