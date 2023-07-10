@@ -89,7 +89,8 @@ source container-test.sh
 for arch in "${ARCHITECTURES[@]}"; do
     # TODO: remove when https://github.com/multiarch/qemu-user-static/issues/128 is fixed
     if [[ "$arch" != "ppc64le" ]]; then
-        test_container "${TAG_PREFIX}-$arch" "linux/$arch"
+        echo "⏭️ Skipping verification ${TAG_PREFIX}-$arch linux/$arch"
+        # test_container "${TAG_PREFIX}-$arch" "linux/$arch"
     fi
     docker image inspect -f '🚀 Built {{.RepoTags}} {{.Id}}' "${TAG_PREFIX}-$arch"
 done

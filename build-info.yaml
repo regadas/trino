@@ -1,0 +1,80 @@
+version: "2"
+timeout: 30
+useBuildIndentity: true
+
+definitions:
+  - &mvn "gcr.io/action-containers/mvn-java17:3.9.1-19@sha256:79893d426f1852abab335a53fa039223f053a3735a312de67bca2adf662a9e30"
+
+pipelines:
+  - pipeline: "Review build"
+    ref: 'pr/.*/merge'
+    stages:
+    - stage: "Build trino jars"
+      tasks:
+      - task: Build trino jars
+        steps:
+        - action: *mvn
+          args:
+          - 'clean'
+          - 'install'
+          - '-B'
+          - '--strict-checksums'
+          - '-V'
+          - '-T'
+          - '1C'
+          - '-DskipTests'
+          - '-pl'
+          - '!:trino-docs'
+    - stage: "Build docker image"
+      tasks:
+      - task: Docker-build
+        steps:
+        - action: *mvn
+          entrypoint: '/bin/bash'
+          workdir: 'core/docker'
+          args:
+          - '-c'
+          - './build.sh'
+          - '-a'
+          - 'amd64'
+  - pipeline: "Master build"
+    ref: "refs/heads/(main|master)"
+    stages:
+    - stage: "Build trino jars"
+      tasks:
+      - task: Build trino jars
+        steps:
+        - action: *mvn
+          args:
+          - 'clean'
+          - 'install'
+          - '-B'
+          - '--strict-checksums'
+          - '-V'
+          - '-T'
+          - '1C'
+          - '-DskipTests'
+          - '-pl'
+          - '!:trino-docs'
+    - stage: "Build docker image"
+      tasks:
+      - task: Docker-build
+        steps:
+        - action: *mvn
+          entrypoint: '/bin/bash'
+          workdir: 'core/docker'
+          args:
+          - '-c'
+          - './build.sh'
+          - '-a'
+          - 'amd64'
+    - stage: "Push docker image"
+      tasks:
+      - task: Docker-build
+        steps:
+        - action: *mvn
+          workdir: 'core/docker'
+          entrypoint: '/bin/bash'
+          args:
+          - '-c'
+          - './push.sh'
