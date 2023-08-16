@@ -29,6 +29,13 @@ import io.trino.metadata.Metadata;
 import io.trino.metadata.QualifiedObjectName;
 import io.trino.metadata.TableHandle;
 import io.trino.metadata.TableMetadata;
+import io.trino.plugin.hive.metastore.Column;
+import io.trino.plugin.hive.metastore.HiveMetastore;
+import io.trino.plugin.hive.metastore.HiveMetastoreFactory;
+import io.trino.plugin.hive.metastore.PrincipalPrivileges;
+import io.trino.plugin.hive.metastore.Storage;
+import io.trino.plugin.hive.metastore.StorageFormat;
+import io.trino.plugin.hive.metastore.Table;
 import io.trino.spi.connector.CatalogSchemaTableName;
 import io.trino.spi.connector.ColumnHandle;
 import io.trino.spi.connector.ColumnMetadata;
@@ -83,6 +90,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.StringJoiner;
 import java.util.function.BiConsumer;
@@ -119,7 +127,7 @@ import static io.trino.SystemSessionProperties.TASK_SCALE_WRITERS_ENABLED;
 import static io.trino.SystemSessionProperties.TASK_SCALE_WRITERS_MAX_WRITER_COUNT;
 import static io.trino.SystemSessionProperties.TASK_WRITER_COUNT;
 import static io.trino.SystemSessionProperties.USE_TABLE_SCAN_NODE_PARTITIONING;
-import static io.trino.SystemSessionProperties.WRITER_MIN_SIZE;
+import static io.trino.SystemSessionProperties.WRITER_SCALING_MIN_DATA_PROCESSED;
 import static io.trino.plugin.hive.HiveColumnHandle.BUCKET_COLUMN_NAME;
 import static io.trino.plugin.hive.HiveColumnHandle.FILE_MODIFIED_TIME_COLUMN_NAME;
 import static io.trino.plugin.hive.HiveColumnHandle.FILE_SIZE_COLUMN_NAME;
@@ -203,23 +211,31 @@ public abstract class BaseHiveConnectorTest
         this.bucketedSession = createBucketedSession(Optional.of(new SelectedRole(ROLE, Optional.of("admin"))));
     }
 
-    protected static QueryRunner createHiveQueryRunner(Map<String, String> extraProperties, Consumer<QueryRunner> additionalSetup)
+    @Override
+    protected QueryRunner createQueryRunner()
+            throws Exception
+    {
+        return createHiveQueryRunner(HiveQueryRunner.builder());
+    }
+
+    protected static QueryRunner createHiveQueryRunner(HiveQueryRunner.Builder<?> builder)
             throws Exception
     {
         // Use faster compression codec in tests. TODO remove explicit config when default changes
         verify(new HiveConfig().getHiveCompressionCodec() == HiveCompressionOption.GZIP);
         String hiveCompressionCodec = HiveCompressionCodec.ZSTD.name();
 
-        DistributedQueryRunner queryRunner = HiveQueryRunner.builder()
-                .setExtraProperties(extraProperties)
-                .setAdditionalSetup(additionalSetup)
-                .setHiveProperties(ImmutableMap.of(
-                        "hive.compression-codec", hiveCompressionCodec,
-                        "hive.allow-register-partition-procedure", "true",
-                        // Reduce writer sort buffer size to ensure SortingFileWriter gets used
-                        "hive.writer-sort-buffer-size", "1MB",
-                        // Make weighted split scheduling more conservative to avoid OOMs in test
-                        "hive.minimum-assigned-split-weight", "0.5"))
+        DistributedQueryRunner queryRunner = builder
+                .addHiveProperty("hive.compression-codec", hiveCompressionCodec)
+                .addHiveProperty("hive.allow-register-partition-procedure", "true")
+                // Reduce writer sort buffer size to ensure SortingFileWriter gets used
+                .addHiveProperty("hive.writer-sort-buffer-size", "1MB")
+                // Make weighted split scheduling more conservative to avoid OOMs in test
+                .addHiveProperty("hive.minimum-assigned-split-weight", "0.5")
+                .addHiveProperty("hive.partition-projection-enabled", "true")
+                // This is needed for e2e scale writers test otherwise 50% threshold of
+                // bufferSize won't get exceeded for scaling to happen.
+                .addExtraProperty("task.max-local-exchange-buffer-size", "32MB")
                 .setInitialTables(REQUIRED_TPCH_TABLES)
                 .setTpchBucketedCatalogEnabled(true)
                 .build();
@@ -240,7 +256,12 @@ public abstract class BaseHiveConnectorTest
             case SUPPORTS_TOPN_PUSHDOWN:
                 return false;
 
+            case SUPPORTS_DROP_SCHEMA_CASCADE:
+                return false;
+
+            case SUPPORTS_ADD_FIELD:
             case SUPPORTS_DROP_FIELD:
+            case SUPPORTS_RENAME_FIELD:
             case SUPPORTS_SET_COLUMN_TYPE:
                 return false;
 
@@ -257,6 +278,8 @@ public abstract class BaseHiveConnectorTest
                 return false;
 
             case SUPPORTS_MULTI_STATEMENT_WRITES:
+                return true;
+            case SUPPORTS_REPORTING_WRITTEN_BYTES:
                 return true;
 
             default:
@@ -2119,21 +2142,12 @@ public abstract class BaseHiveConnectorTest
                 // REGEX format is readonly
                 continue;
             }
-            for (HiveCompressionCodec compressionCodec : HiveCompressionCodec.values()) {
-                if ((storageFormat == HiveStorageFormat.AVRO) && (compressionCodec == HiveCompressionCodec.LZ4)) {
-                    continue;
-                }
-                if ((storageFormat == HiveStorageFormat.PARQUET) && (compressionCodec == HiveCompressionCodec.LZ4)) {
-                    // TODO (https://github.com/trinodb/trino/issues/9142) Support LZ4 compression with native Parquet writer
-                    continue;
-                }
-                testEmptyBucketedTable(storageFormat, compressionCodec, true);
-            }
-            testEmptyBucketedTable(storageFormat, HiveCompressionCodec.GZIP, false);
+            testEmptyBucketedTable(storageFormat, true);
+            testEmptyBucketedTable(storageFormat, false);
         }
     }
 
-    private void testEmptyBucketedTable(HiveStorageFormat storageFormat, HiveCompressionCodec compressionCodec, boolean createEmpty)
+    private void testEmptyBucketedTable(HiveStorageFormat storageFormat, boolean createEmpty)
     {
         String tableName = "test_empty_bucketed_table";
 
@@ -2161,7 +2175,6 @@ public abstract class BaseHiveConnectorTest
         Session session = Session.builder(getSession())
                 .setSystemProperty("task_writer_count", "4")
                 .setCatalogSessionProperty(catalog, "create_empty_bucket_files", String.valueOf(createEmpty))
-                .setCatalogSessionProperty(catalog, "compression_codec", compressionCodec.name())
                 .build();
         assertUpdate(session, "INSERT INTO " + tableName + " VALUES ('a0', 'b0', 'c0')", 1);
         assertUpdate(session, "INSERT INTO " + tableName + " VALUES ('a1', 'b1', 'c1')", 1);
@@ -4050,7 +4063,7 @@ public abstract class BaseHiveConnectorTest
                             .setSystemProperty("task_writer_count", "1")
                             .setSystemProperty("scale_writers", "true")
                             .setSystemProperty("task_scale_writers_enabled", "false")
-                            .setSystemProperty("writer_min_size", "32MB")
+                            .setSystemProperty("writer_scaling_min_data_processed", "32MB")
                             .build(),
                     createTableSql,
                     (long) computeActual("SELECT count(*) FROM tpch.tiny.orders").getOnlyValue());
@@ -4075,7 +4088,7 @@ public abstract class BaseHiveConnectorTest
                             .setSystemProperty("task_writer_count", "1")
                             .setSystemProperty("scale_writers", "true")
                             .setSystemProperty("task_scale_writers_enabled", "false")
-                            .setSystemProperty("writer_min_size", "1MB")
+                            .setSystemProperty("writer_scaling_min_data_processed", "1MB")
                             .setCatalogSessionProperty(catalog, "parquet_writer_block_size", "4MB")
                             .build(),
                     createTableSql,
@@ -4105,7 +4118,7 @@ public abstract class BaseHiveConnectorTest
                             .setSystemProperty("task_writer_count", "1")
                             .setSystemProperty("scale_writers", "true")
                             .setSystemProperty("task_scale_writers_enabled", "false")
-                            .setSystemProperty("writer_min_size", "1MB")
+                            .setSystemProperty("writer_scaling_min_data_processed", "1MB")
                             .setSystemProperty("join_distribution_type", "PARTITIONED")
                             .setCatalogSessionProperty(catalog, "parquet_writer_block_size", "4MB")
                             .build(),
@@ -4174,17 +4187,19 @@ public abstract class BaseHiveConnectorTest
     public void testWriterTasksCountLimitPartitionedScaleWritersEnabled()
     {
         testLimitWriterTasks(2, 4, true, true, true, DataSize.of(1, MEGABYTE));
-        testLimitWriterTasks(2, 2, true, true, true, DataSize.of(32, MEGABYTE));
+        // Since we track page size for scaling writer instead of actual compressed output file size, we need to have a
+        // larger threshold for writerScalingMinDataProcessed. This way we can ensure that the writer scaling is not triggered.
+        testLimitWriterTasks(2, 2, true, true, true, DataSize.of(128, MEGABYTE));
     }
 
-    private void testLimitWriterTasks(int maxWriterTasks, int expectedFilesCount, boolean scaleWritersEnabled, boolean redistributeWrites, boolean partitioned, DataSize writerMinSize)
+    private void testLimitWriterTasks(int maxWriterTasks, int expectedFilesCount, boolean scaleWritersEnabled, boolean redistributeWrites, boolean partitioned, DataSize writerScalingMinDataProcessed)
     {
         Session session = Session.builder(getSession())
                 .setSystemProperty(SCALE_WRITERS, Boolean.toString(scaleWritersEnabled))
                 .setSystemProperty(MAX_WRITER_TASKS_COUNT, Integer.toString(maxWriterTasks))
                 .setSystemProperty(REDISTRIBUTE_WRITES, Boolean.toString(redistributeWrites))
                 .setSystemProperty(TASK_WRITER_COUNT, "1")
-                .setSystemProperty(WRITER_MIN_SIZE, writerMinSize.toString())
+                .setSystemProperty(WRITER_SCALING_MIN_DATA_PROCESSED, writerScalingMinDataProcessed.toString())
                 .setSystemProperty(TASK_SCALE_WRITERS_ENABLED, "false")
                 .build();
         String tableName = "writing_tasks_limit_%s".formatted(randomNameSuffix());
@@ -4203,7 +4218,7 @@ public abstract class BaseHiveConnectorTest
 
     protected AbstractLongAssert<?> testTaskScaleWriters(
             Session session,
-            DataSize writerMinSize,
+            DataSize writerScalingMinDataProcessed,
             int taskMaxScaleWriterCount,
             boolean scaleWriters)
     {
@@ -4216,7 +4231,7 @@ public abstract class BaseHiveConnectorTest
                     Session.builder(session)
                             .setSystemProperty(SCALE_WRITERS, String.valueOf(scaleWriters))
                             .setSystemProperty(TASK_SCALE_WRITERS_ENABLED, "true")
-                            .setSystemProperty(WRITER_MIN_SIZE, writerMinSize.toString())
+                            .setSystemProperty(WRITER_SCALING_MIN_DATA_PROCESSED, writerScalingMinDataProcessed.toString())
                             .setSystemProperty(TASK_SCALE_WRITERS_MAX_WRITER_COUNT, String.valueOf(taskMaxScaleWriterCount))
                             // Set the value higher than sf1 input data size such that fault-tolerant scheduler
                             // shouldn't add new task and scaling only happens through the local scaling exchange.
@@ -4332,6 +4347,33 @@ public abstract class BaseHiveConnectorTest
         assertUpdate(createTableSql);
         actualResult = computeActual("SHOW CREATE TABLE test_show_create_table_with_special_characters");
         assertEquals(getOnlyElement(actualResult.getOnlyColumnAsSet()), createTableSql);
+    }
+
+    @Test
+    public void testShowCreateTableWithColumnProperties()
+    {
+        try (TestTable table = new TestTable(
+                getQueryRunner()::execute,
+                "test_show_create_table_with_column_properties",
+                "(a INT, b INT WITH (partition_projection_type = 'INTEGER', partition_projection_range = ARRAY['0', '10'])) " +
+                        "WITH (" +
+                        "    partition_projection_enabled = true," +
+                        "    partitioned_by = ARRAY['b']," +
+                        "    partition_projection_location_template = 's3://example/${b}')")) {
+            String result = (String) computeScalar("SHOW CREATE TABLE " + table.getName());
+            assertEquals(
+                    result,
+                    "CREATE TABLE hive.tpch." + table.getName() + " (\n" +
+                            "   a integer,\n" +
+                            "   b integer WITH ( partition_projection_range = ARRAY['0','10'], partition_projection_type = 'INTEGER' )\n" +
+                            ")\n" +
+                            "WITH (\n" +
+                            "   format = 'ORC',\n" +
+                            "   partition_projection_enabled = true,\n" +
+                            "   partition_projection_location_template = 's3://example/${b}',\n" +
+                            "   partitioned_by = ARRAY['b']\n" +
+                            ")");
+        }
     }
 
     private void testCreateExternalTable(
@@ -5229,21 +5271,7 @@ public abstract class BaseHiveConnectorTest
     @Test(dataProvider = "timestampPrecisionAndValues")
     public void testParquetTimestampPredicatePushdown(HiveTimestampPrecision timestampPrecision, LocalDateTime value)
     {
-        doTestParquetTimestampPredicatePushdown(getSession(), timestampPrecision, value);
-    }
-
-    @Test(dataProvider = "timestampPrecisionAndValues")
-    public void testParquetTimestampPredicatePushdownHiveWriter(HiveTimestampPrecision timestampPrecision, LocalDateTime value)
-    {
-        Session session = Session.builder(getSession())
-                .setCatalogSessionProperty("hive", "parquet_optimized_writer_enabled", "false")
-                .build();
-        doTestParquetTimestampPredicatePushdown(session, timestampPrecision, value);
-    }
-
-    private void doTestParquetTimestampPredicatePushdown(Session baseSession, HiveTimestampPrecision timestampPrecision, LocalDateTime value)
-    {
-        Session session = withTimestampPrecision(baseSession, timestampPrecision);
+        Session session = withTimestampPrecision(getSession(), timestampPrecision);
         String tableName = "test_parquet_timestamp_predicate_pushdown_" + randomNameSuffix();
         assertUpdate("DROP TABLE IF EXISTS " + tableName);
         assertUpdate("CREATE TABLE " + tableName + " (t TIMESTAMP) WITH (format = 'PARQUET')");
@@ -5341,24 +5369,10 @@ public abstract class BaseHiveConnectorTest
     @Test
     public void testParquetDictionaryPredicatePushdown()
     {
-        testParquetDictionaryPredicatePushdown(getSession());
-    }
-
-    @Test
-    public void testParquetDictionaryPredicatePushdownWithHiveWriter()
-    {
-        testParquetDictionaryPredicatePushdown(
-                Session.builder(getSession())
-                        .setCatalogSessionProperty("hive", "parquet_optimized_writer_enabled", "false")
-                        .build());
-    }
-
-    private void testParquetDictionaryPredicatePushdown(Session session)
-    {
         String tableName = "test_parquet_dictionary_pushdown_" + randomNameSuffix();
-        assertUpdate(session, "DROP TABLE IF EXISTS " + tableName);
-        assertUpdate(session, "CREATE TABLE " + tableName + " (n BIGINT) WITH (format = 'PARQUET')");
-        assertUpdate(session, "INSERT INTO " + tableName + " VALUES 1, 1, 2, 2, 4, 4, 5, 5", 8);
+        assertUpdate("DROP TABLE IF EXISTS " + tableName);
+        assertUpdate("CREATE TABLE " + tableName + " (n BIGINT) WITH (format = 'PARQUET')");
+        assertUpdate("INSERT INTO " + tableName + " VALUES 1, 1, 2, 2, 4, 4, 5, 5", 8);
         assertNoDataRead("SELECT * FROM " + tableName + " WHERE n = 3");
     }
 
@@ -7792,7 +7806,7 @@ public abstract class BaseHiveConnectorTest
     public void testCreateTableWithCompressionCodec(HiveCompressionCodec compressionCodec)
     {
         testWithAllStorageFormats((session, hiveStorageFormat) -> {
-            if (isNativeParquetWriter(session, hiveStorageFormat) && compressionCodec == HiveCompressionCodec.LZ4) {
+            if (hiveStorageFormat == HiveStorageFormat.PARQUET && compressionCodec == HiveCompressionCodec.LZ4) {
                 // TODO (https://github.com/trinodb/trino/issues/9142) Support LZ4 compression with native Parquet writer
                 assertThatThrownBy(() -> testCreateTableWithCompressionCodec(session, hiveStorageFormat, compressionCodec))
                         .hasMessage("Unsupported codec: LZ4");
@@ -8024,6 +8038,12 @@ public abstract class BaseHiveConnectorTest
     @Test
     public void testOptimizeWithWriterScaling()
     {
+        testOptimizeWithWriterScaling(true, false, DataSize.of(1, GIGABYTE));
+        testOptimizeWithWriterScaling(false, true, DataSize.of(0, MEGABYTE));
+    }
+
+    private void testOptimizeWithWriterScaling(boolean scaleWriters, boolean taskScaleWritersEnabled, DataSize writerScalingMinDataProcessed)
+    {
         String tableName = "test_optimize_witer_scaling" + randomNameSuffix();
         assertUpdate("CREATE TABLE " + tableName + " AS SELECT * FROM tpch.sf1.nation WITH NO DATA", 0);
 
@@ -8033,12 +8053,18 @@ public abstract class BaseHiveConnectorTest
         Set<String> initialFiles = getTableFiles(tableName);
         assertThat(initialFiles).hasSize(4);
 
-        Session writerScalingSession = Session.builder(optimizeEnabledSession())
-                .setSystemProperty("scale_writers", "true")
-                .setSystemProperty("writer_min_size", "100GB")
-                .build();
+        Session.SessionBuilder writerScalingSessionBuilder = Session.builder(optimizeEnabledSession())
+                .setSystemProperty("scale_writers", String.valueOf(scaleWriters))
+                .setSystemProperty("writer_scaling_min_data_processed", writerScalingMinDataProcessed.toString())
+                // task_scale_writers_enabled shouldn't have any effect on writing data in the optimize command
+                .setSystemProperty("task_scale_writers_enabled", String.valueOf(taskScaleWritersEnabled))
+                .setSystemProperty("task_writer_count", "1");
 
-        assertUpdate(writerScalingSession, "ALTER TABLE " + tableName + " EXECUTE optimize(file_size_threshold => '10kB')");
+        if (!scaleWriters) {
+            writerScalingSessionBuilder.setSystemProperty("max_writer_tasks_count", "1");
+        }
+
+        assertUpdate(writerScalingSessionBuilder.build(), "ALTER TABLE " + tableName + " EXECUTE optimize(file_size_threshold => '10kB')");
         assertNationNTimes(tableName, 4);
 
         Set<String> compactedFiles = getTableFiles(tableName);
@@ -8072,7 +8098,7 @@ public abstract class BaseHiveConnectorTest
         Session optimizeEnabledSession = optimizeEnabledSession();
         Session writerScalingSession = Session.builder(optimizeEnabledSession)
                 .setSystemProperty("scale_writers", "true")
-                .setSystemProperty("writer_min_size", "100GB")
+                .setSystemProperty("writer_scaling_min_data_processed", "100GB")
                 .build();
 
         // optimize with unsupported WHERE
@@ -8328,6 +8354,49 @@ public abstract class BaseHiveConnectorTest
         assertThat(query(nanosSessions, "SELECT ts FROM " + prestoViewNameNanos)).matches("VALUES TIMESTAMP '1990-01-02 12:13:14.123000000'");
 
         assertThat(query(nanosSessions, "SELECT ts FROM hive_timestamp_nanos.tpch." + prestoViewNameNanos)).matches("VALUES TIMESTAMP '1990-01-02 12:13:14.123000000'");
+    }
+
+    @Test
+    public void testTimestampWithTimeZone()
+    {
+        String catalog = getSession().getCatalog().orElseThrow();
+
+        assertUpdate("CREATE TABLE test_timestamptz_base (t timestamp) WITH (format = 'PARQUET')");
+        assertUpdate("INSERT INTO test_timestamptz_base (t) VALUES" +
+                     "(timestamp '2022-07-26 12:13')", 1);
+
+        // Writing TIMESTAMP WITH LOCAL TIME ZONE is not supported, so we first create Parquet object by writing unzoned
+        // timestamp (which is converted to UTC using default timezone) and then creating another table that reads from the same file.
+        String tableLocation = getTableLocation("test_timestamptz_base");
+
+        // TIMESTAMP WITH LOCAL TIME ZONE is not mapped to any Trino type, so we need to create the metastore entry manually
+        HiveMetastore metastore = ((HiveConnector) getDistributedQueryRunner().getCoordinator().getConnector(catalog))
+                .getInjector().getInstance(HiveMetastoreFactory.class)
+                .createMetastore(Optional.of(getSession().getIdentity().toConnectorIdentity(catalog)));
+        metastore.createTable(
+                new Table(
+                        "tpch",
+                        "test_timestamptz",
+                        Optional.of("hive"),
+                        "EXTERNAL_TABLE",
+                        new Storage(
+                                StorageFormat.fromHiveStorageFormat(HiveStorageFormat.PARQUET),
+                                Optional.of(tableLocation),
+                                Optional.empty(),
+                                false,
+                                Collections.emptyMap()),
+                        List.of(new Column("t", HiveType.HIVE_TIMESTAMPLOCALTZ, Optional.empty())),
+                        List.of(),
+                        Collections.emptyMap(),
+                        Optional.empty(),
+                        Optional.empty(),
+                        OptionalLong.empty()),
+                PrincipalPrivileges.fromHivePrivilegeInfos(Collections.emptySet()));
+
+        assertThat(query("SELECT * FROM test_timestamptz"))
+                .matches("VALUES TIMESTAMP '2022-07-26 17:13:00.000 UTC'");
+
+        assertUpdate("DROP TABLE test_timestamptz");
     }
 
     @Test(dataProvider = "legalUseColumnNamesProvider")
@@ -8736,16 +8805,8 @@ public abstract class BaseHiveConnectorTest
         }
     }
 
-    private boolean isNativeParquetWriter(Session session, HiveStorageFormat storageFormat)
-    {
-        return storageFormat == HiveStorageFormat.PARQUET &&
-                "true".equals(session.getCatalogProperties("hive").get("parquet_optimized_writer_enabled"));
-    }
-
     private List<TestingHiveStorageFormat> getAllTestingHiveStorageFormat()
     {
-        Session session = getSession();
-        String catalog = session.getCatalog().orElseThrow();
         ImmutableList.Builder<TestingHiveStorageFormat> formats = ImmutableList.builder();
         for (HiveStorageFormat hiveStorageFormat : HiveStorageFormat.values()) {
             if (hiveStorageFormat == HiveStorageFormat.CSV) {
@@ -8756,20 +8817,7 @@ public abstract class BaseHiveConnectorTest
                 // REGEX format is read-only
                 continue;
             }
-            if (hiveStorageFormat == HiveStorageFormat.PARQUET) {
-                formats.add(new TestingHiveStorageFormat(
-                        Session.builder(session)
-                                .setCatalogSessionProperty(catalog, "parquet_optimized_writer_enabled", "false")
-                                .build(),
-                        hiveStorageFormat));
-                formats.add(new TestingHiveStorageFormat(
-                        Session.builder(session)
-                                .setCatalogSessionProperty(catalog, "parquet_optimized_writer_enabled", "true")
-                                .build(),
-                        hiveStorageFormat));
-                continue;
-            }
-            formats.add(new TestingHiveStorageFormat(session, hiveStorageFormat));
+            formats.add(new TestingHiveStorageFormat(getSession(), hiveStorageFormat));
         }
         return formats.build();
     }

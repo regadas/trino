@@ -39,6 +39,7 @@ import static io.trino.spi.type.TimeZoneKey.UTC_KEY;
 import static io.trino.spi.type.Timestamps.PICOSECONDS_PER_MILLISECOND;
 import static io.trino.spi.type.Timestamps.rescale;
 import static io.trino.spi.type.TypeOperatorDeclaration.extractOperatorDeclaration;
+import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 import static java.lang.invoke.MethodHandles.lookup;
 
@@ -107,9 +108,9 @@ final class LongTimestampWithTimeZoneType
             blockBuilder.appendNull();
         }
         else {
-            blockBuilder.writeLong(getPackedEpochMillis(block, position));
-            blockBuilder.writeInt(getPicosOfMilli(block, position));
-            blockBuilder.closeEntry();
+            ((Fixed12BlockBuilder) blockBuilder).writeFixed12(
+                    getPackedEpochMillis(block, position),
+                    getPicosOfMilli(block, position));
         }
     }
 
@@ -127,9 +128,9 @@ final class LongTimestampWithTimeZoneType
     {
         LongTimestampWithTimeZone timestamp = (LongTimestampWithTimeZone) value;
 
-        blockBuilder.writeLong(packDateTimeWithZone(timestamp.getEpochMillis(), timestamp.getTimeZoneKey()));
-        blockBuilder.writeInt(timestamp.getPicosOfMilli());
-        blockBuilder.closeEntry();
+        ((Fixed12BlockBuilder) blockBuilder).writeFixed12(
+                packDateTimeWithZone(timestamp.getEpochMillis(), timestamp.getTimeZoneKey()),
+                timestamp.getPicosOfMilli());
     }
 
     @Override
@@ -151,7 +152,7 @@ final class LongTimestampWithTimeZoneType
         LongTimestampWithTimeZone timestampWithTimeZone = (LongTimestampWithTimeZone) value;
         long epochMillis = timestampWithTimeZone.getEpochMillis();
         int picosOfMilli = timestampWithTimeZone.getPicosOfMilli();
-        picosOfMilli -= rescale(1, 0, 12 - getPrecision());
+        picosOfMilli -= toIntExact(rescale(1, 0, 12 - getPrecision()));
         if (picosOfMilli < 0) {
             if (epochMillis == Long.MIN_VALUE) {
                 return Optional.empty();
@@ -169,7 +170,7 @@ final class LongTimestampWithTimeZoneType
         LongTimestampWithTimeZone timestampWithTimeZone = (LongTimestampWithTimeZone) value;
         long epochMillis = timestampWithTimeZone.getEpochMillis();
         int picosOfMilli = timestampWithTimeZone.getPicosOfMilli();
-        picosOfMilli += rescale(1, 0, 12 - getPrecision());
+        picosOfMilli += toIntExact(rescale(1, 0, 12 - getPrecision()));
         if (picosOfMilli >= PICOSECONDS_PER_MILLISECOND) {
             if (epochMillis == Long.MAX_VALUE) {
                 return Optional.empty();

@@ -17,9 +17,8 @@ package io.trino.plugin.hive;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableMap;
+import com.google.errorprone.annotations.Immutable;
 import io.trino.plugin.hive.metastore.HiveColumnStatistics;
-
-import javax.annotation.concurrent.Immutable;
 
 import java.util.Map;
 import java.util.Objects;
@@ -59,11 +58,6 @@ public class PartitionStatistics
     public Map<String, HiveColumnStatistics> getColumnStatistics()
     {
         return columnStatistics;
-    }
-
-    public PartitionStatistics withAdjustedRowCount(long adjustment)
-    {
-        return new PartitionStatistics(basicStatistics.withAdjustedRowCount(adjustment), columnStatistics);
     }
 
     @Override

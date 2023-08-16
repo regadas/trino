@@ -14,14 +14,13 @@
 package io.trino.execution.executor;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.errorprone.annotations.ThreadSafe;
+import com.google.errorprone.annotations.concurrent.GuardedBy;
 import com.google.inject.Inject;
 import io.airlift.stats.CounterStat;
 import io.trino.execution.TaskManagerConfig;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
-
-import javax.annotation.concurrent.GuardedBy;
-import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Collection;
 import java.util.PriorityQueue;
@@ -31,6 +30,8 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.math.DoubleMath.roundToLong;
+import static java.math.RoundingMode.HALF_UP;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -170,7 +171,7 @@ public class MultilevelSplitQueue
                 }
             }
 
-            targetScheduledTime /= levelTimeMultiplier;
+            targetScheduledTime = roundToLong(targetScheduledTime / levelTimeMultiplier, HALF_UP);
         }
 
         if (selectedLevel == -1) {

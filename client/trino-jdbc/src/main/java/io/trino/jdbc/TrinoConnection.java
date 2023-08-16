@@ -22,9 +22,8 @@ import io.airlift.units.Duration;
 import io.trino.client.ClientSelectedRole;
 import io.trino.client.ClientSession;
 import io.trino.client.StatementClient;
-import okhttp3.OkHttpClient;
-
-import javax.annotation.Nullable;
+import jakarta.annotation.Nullable;
+import okhttp3.Call;
 
 import java.net.URI;
 import java.nio.charset.CharsetEncoder;
@@ -110,14 +109,13 @@ public class TrinoConnection
     private final Map<String, String> preparedStatements = new ConcurrentHashMap<>();
     private final Map<String, ClientSelectedRole> roles = new ConcurrentHashMap<>();
     private final AtomicReference<String> transactionId = new AtomicReference<>();
-    private final OkHttpClient httpClient;
+    private final Call.Factory httpCallFactory;
     private final Set<TrinoStatement> statements = newSetFromMap(new ConcurrentHashMap<>());
 
-    TrinoConnection(TrinoDriverUri uri, OkHttpClient httpClient)
-            throws SQLException
+    TrinoConnection(TrinoDriverUri uri, Call.Factory httpCallFactory)
     {
         requireNonNull(uri, "uri is null");
-        this.jdbcUri = uri.getJdbcUri();
+        this.jdbcUri = uri.getUri();
         this.httpUri = uri.getHttpUri();
         uri.getSchema().ifPresent(schema::set);
         uri.getCatalog().ifPresent(catalog::set);
@@ -136,7 +134,7 @@ public class TrinoConnection
 
         this.assumeLiteralUnderscoreInMetadataCallsForNonConformingClients = uri.isAssumeLiteralUnderscoreInMetadataCallsForNonConformingClients();
 
-        this.httpClient = requireNonNull(httpClient, "httpClient is null");
+        this.httpCallFactory = requireNonNull(httpCallFactory, "httpCallFactory is null");
         uri.getClientInfo().ifPresent(tags -> clientInfo.put(CLIENT_INFO, tags));
         uri.getClientTags().ifPresent(tags -> clientInfo.put(CLIENT_TAGS, tags));
         uri.getTraceToken().ifPresent(tags -> clientInfo.put(TRACE_TOKEN, tags));
@@ -755,7 +753,7 @@ public class TrinoConnection
                 .compressionDisabled(compressionDisabled)
                 .build();
 
-        return newStatementClient(httpClient, session, sql);
+        return newStatementClient(httpCallFactory, session, sql);
     }
 
     void updateSession(StatementClient client)

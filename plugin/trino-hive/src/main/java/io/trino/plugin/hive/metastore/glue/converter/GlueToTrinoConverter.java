@@ -33,9 +33,8 @@ import io.trino.plugin.hive.util.HiveBucketing.BucketingVersion;
 import io.trino.spi.TrinoException;
 import io.trino.spi.connector.SchemaTableName;
 import io.trino.spi.security.PrincipalType;
+import jakarta.annotation.Nullable;
 import org.gaul.modernizer_maven_annotations.SuppressModernizer;
-
-import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.Locale;
@@ -63,6 +62,12 @@ public final class GlueToTrinoConverter
     private static final String PUBLIC_OWNER = "PUBLIC";
 
     private GlueToTrinoConverter() {}
+
+    @SuppressModernizer // Usage of `Column.getParameters` is not allowed. Only this method can call that.
+    public static Map<String, String> getColumnParameters(com.amazonaws.services.glue.model.Column glueColumn)
+    {
+        return firstNonNull(glueColumn.getParameters(), ImmutableMap.of());
+    }
 
     public static String getTableType(com.amazonaws.services.glue.model.Table glueTable)
     {
@@ -133,7 +138,7 @@ public final class GlueToTrinoConverter
             // Iceberg tables do not need to read the StorageDescriptor field, but we still need to return dummy properties for compatibility
             // Delta Lake tables only need to provide a dummy properties if a StorageDescriptor was not explicitly configured.
             // Materialized views do not need to read the StorageDescriptor, but we still need to return dummy properties for compatibility
-            tableBuilder.setDataColumns(ImmutableList.of(new Column("dummy", HIVE_INT, Optional.empty())));
+            tableBuilder.setDataColumns(ImmutableList.of(new Column("dummy", HIVE_INT, Optional.empty(), ImmutableMap.of())));
             tableBuilder.getStorageBuilder().setStorageFormat(StorageFormat.fromHiveStorageFormat(HiveStorageFormat.PARQUET));
         }
         else {
@@ -160,9 +165,9 @@ public final class GlueToTrinoConverter
         // to string to avoid cast exceptions.
         if (HiveStorageFormat.CSV.getSerde().equals(serde)) {
             //TODO(https://github.com/trinodb/trino/issues/7240) Add tests
-            return new Column(glueColumn.getName(), HiveType.HIVE_STRING, Optional.ofNullable(glueColumn.getComment()));
+            return new Column(glueColumn.getName(), HiveType.HIVE_STRING, Optional.ofNullable(glueColumn.getComment()), getColumnParameters(glueColumn));
         }
-        return new Column(glueColumn.getName(), convertType(table, glueColumn), Optional.ofNullable(glueColumn.getComment()));
+        return new Column(glueColumn.getName(), convertType(table, glueColumn), Optional.ofNullable(glueColumn.getComment()), getColumnParameters(glueColumn));
     }
 
     private static HiveType convertType(SchemaTableName table, com.amazonaws.services.glue.model.Column column)

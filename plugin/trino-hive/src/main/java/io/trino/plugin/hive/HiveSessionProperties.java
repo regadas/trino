@@ -66,6 +66,7 @@ public final class HiveSessionProperties
     private static final String FORCE_LOCAL_SCHEDULING = "force_local_scheduling";
     private static final String INSERT_EXISTING_PARTITIONS_BEHAVIOR = "insert_existing_partitions_behavior";
     private static final String AVRO_NATIVE_READER_ENABLED = "avro_native_reader_enabled";
+    private static final String AVRO_NATIVE_WRITER_ENABLED = "avro_native_writer_enabled";
     private static final String CSV_NATIVE_READER_ENABLED = "csv_native_reader_enabled";
     private static final String CSV_NATIVE_WRITER_ENABLED = "csv_native_writer_enabled";
     private static final String JSON_NATIVE_READER_ENABLED = "json_native_reader_enabled";
@@ -127,7 +128,6 @@ public final class HiveSessionProperties
     private static final String QUERY_PARTITION_FILTER_REQUIRED_SCHEMAS = "query_partition_filter_required_schemas";
     private static final String PROJECTION_PUSHDOWN_ENABLED = "projection_pushdown_enabled";
     private static final String TIMESTAMP_PRECISION = "timestamp_precision";
-    private static final String PARQUET_OPTIMIZED_WRITER_ENABLED = "parquet_optimized_writer_enabled";
     private static final String DYNAMIC_FILTERING_WAIT_TIMEOUT = "dynamic_filtering_wait_timeout";
     private static final String OPTIMIZE_SYMLINK_LISTING = "optimize_symlink_listing";
     private static final String HIVE_VIEWS_LEGACY_TRANSLATION = "hive_views_legacy_translation";
@@ -208,6 +208,11 @@ public final class HiveSessionProperties
                         AVRO_NATIVE_READER_ENABLED,
                         "Use native Avro file reader",
                         hiveFormatsConfig.isAvroFileNativeReaderEnabled(),
+                        false),
+                booleanProperty(
+                        AVRO_NATIVE_WRITER_ENABLED,
+                        "Use native Avro file writer",
+                        hiveFormatsConfig.isAvroFileNativeWriterEnabled(),
                         false),
                 booleanProperty(
                         CSV_NATIVE_READER_ENABLED,
@@ -566,11 +571,6 @@ public final class HiveSessionProperties
                         HiveTimestampPrecision.class,
                         hiveConfig.getTimestampPrecision(),
                         false),
-                booleanProperty(
-                        PARQUET_OPTIMIZED_WRITER_ENABLED,
-                        "Enable optimized writer",
-                        parquetWriterConfig.isParquetOptimizedWriterEnabled(),
-                        false),
                 durationProperty(
                         DYNAMIC_FILTERING_WAIT_TIMEOUT,
                         "Duration to wait for completion of dynamic filters during split generation",
@@ -668,6 +668,11 @@ public final class HiveSessionProperties
     public static boolean isAvroNativeReaderEnabled(ConnectorSession session)
     {
         return session.getProperty(AVRO_NATIVE_READER_ENABLED, Boolean.class);
+    }
+
+    public static boolean isAvroNativeWriterEnabled(ConnectorSession session)
+    {
+        return session.getProperty(AVRO_NATIVE_WRITER_ENABLED, Boolean.class);
     }
 
     public static boolean isCsvNativeReaderEnabled(ConnectorSession session)
@@ -989,11 +994,6 @@ public final class HiveSessionProperties
     public static HiveTimestampPrecision getTimestampPrecision(ConnectorSession session)
     {
         return session.getProperty(TIMESTAMP_PRECISION, HiveTimestampPrecision.class);
-    }
-
-    public static boolean isParquetOptimizedWriterEnabled(ConnectorSession session)
-    {
-        return session.getProperty(PARQUET_OPTIMIZED_WRITER_ENABLED, Boolean.class);
     }
 
     public static Duration getDynamicFilteringWaitTimeout(ConnectorSession session)

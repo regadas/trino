@@ -101,7 +101,7 @@ public class TestCheckConstraint
                         return ImmutableList.of("regionkey < 10");
                     }
                     if (schemaTableName.equals(new SchemaTableName("tiny", "nation_multiple_column_constraint"))) {
-                        return ImmutableList.of("nationkey > 100 AND regionkey > 50");
+                        return ImmutableList.of("nationkey < 100 AND regionkey < 50");
                     }
                     if (schemaTableName.equals(new SchemaTableName("tiny", "nation_invalid_function"))) {
                         return ImmutableList.of("invalid_function(nationkey) > 100");
@@ -230,13 +230,13 @@ public class TestCheckConstraint
     @Test
     public void testInsertCheckMultipleColumns()
     {
-        assertThat(assertions.query("INSERT INTO mock.tiny.nation_multiple_column_constraint VALUES (101, 'POLAND', 51, 'No comment')"))
+        assertThat(assertions.query("INSERT INTO mock.tiny.nation_multiple_column_constraint VALUES (99, 'POLAND', 49, 'No comment')"))
                 .matches("SELECT BIGINT '1'");
 
-        assertThatThrownBy(() -> assertions.query("INSERT INTO mock.tiny.nation_multiple_column_constraint VALUES (101, 'POLAND', 50, 'No comment')"))
-                .hasMessage("Check constraint violation: ((nationkey > 100) AND (regionkey > 50))");
-        assertThatThrownBy(() -> assertions.query("INSERT INTO mock.tiny.nation_multiple_column_constraint VALUES (100, 'POLAND', 51, 'No comment')"))
-                .hasMessage("Check constraint violation: ((nationkey > 100) AND (regionkey > 50))");
+        assertThatThrownBy(() -> assertions.query("INSERT INTO mock.tiny.nation_multiple_column_constraint VALUES (99, 'POLAND', 50, 'No comment')"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
+        assertThatThrownBy(() -> assertions.query("INSERT INTO mock.tiny.nation_multiple_column_constraint VALUES (100, 'POLAND', 49, 'No comment')"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
     }
 
     @Test
@@ -350,31 +350,122 @@ public class TestCheckConstraint
     public void testUpdate()
     {
         // Within allowed check constraint
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 2 WHERE nationkey < 3"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 2 WHERE nationkey IN (1, 2, 3)"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey + 1"))
+                .matches("SELECT BIGINT '25'");
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 2 WHERE nationkey IN (1, 2, 3)"))
+                .matches("SELECT BIGINT '3'");
 
         // Outside allowed check constraint
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 2"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 2 WHERE nationkey IN (1, 11)"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 10"))
+                .hasMessage("Check constraint violation: (regionkey < 10)");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 10 WHERE nationkey IN (1, 11)"))
+                .hasMessage("Check constraint violation: (regionkey < 10)");
 
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 2 WHERE nationkey = 11"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET regionkey = regionkey * 10 WHERE nationkey = 11"))
+                .hasMessage("Check constraint violation: (regionkey < 10)");
 
         // Within allowed check constraint, but updated rows are outside the check constraint
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET nationkey = 10 WHERE nationkey < 3"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET nationkey = null WHERE nationkey < 3"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET nationkey = 10 WHERE nationkey < 3"))
+                .matches("SELECT BIGINT '3'");
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET nationkey = null WHERE nationkey < 3"))
+                .matches("SELECT BIGINT '3'");
 
         // Outside allowed check constraint, and updated rows are outside the check constraint
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET nationkey = 10 WHERE nationkey = 10"))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
-        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation SET nationkey = null WHERE nationkey = null "))
-                .hasMessage("line 1:1: Updating a table with a check constraint is not supported");
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET nationkey = 10 WHERE nationkey = 10"))
+                .matches("SELECT BIGINT '1'");
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET nationkey = 10 WHERE nationkey = null"))
+                .matches("SELECT BIGINT '0'");
+    }
+
+    @Test
+    public void testUpdateAllowUnknown()
+    {
+        // Predicate evaluates to UNKNOWN (e.g. NULL > 100) should not violate check constraint
+        assertThat(assertions.query("UPDATE mock.tiny.nation SET regionkey = NULL"))
+                .matches("SELECT BIGINT '25'");
+    }
+
+    @Test
+    public void testUpdateCheckMultipleColumns()
+    {
+        // Within allowed check constraint
+        assertThat(assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET regionkey = 49, nationkey = 99"))
+                .matches("SELECT BIGINT '25'");
+        assertThat(assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET regionkey = 49"))
+                .matches("SELECT BIGINT '25'");
+        assertThat(assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET nationkey = 99"))
+                .matches("SELECT BIGINT '25'");
+
+        // Outside allowed check constraint
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET regionkey = 50, nationkey = 100"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET regionkey = 50, nationkey = 99"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET regionkey = 49, nationkey = 100"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET regionkey = 50"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_multiple_column_constraint SET nationkey = 100"))
+                .hasMessage("Check constraint violation: ((nationkey < 100) AND (regionkey < 50))");
+    }
+
+    @Test
+    public void testUpdateSubquery()
+    {
+        // TODO Support subqueries for UPDATE statement in check constraint
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_subquery SET nationkey = 100"))
+                .hasMessageContaining("Unexpected subquery expression in logical plan");
+    }
+
+    @Test
+    public void testUpdateUnsupportedCurrentDate()
+    {
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_current_date SET nationkey = 10"))
+                .hasMessageContaining("Check constraint expression should not contain temporal expression");
+    }
+
+    @Test
+    public void testUpdateUnsupportedCurrentTime()
+    {
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_current_time SET nationkey = 10"))
+                .hasMessageContaining("Check constraint expression should not contain temporal expression");
+    }
+
+    @Test
+    public void testUpdateUnsupportedCurrentTimestamp()
+    {
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_current_timestamp SET nationkey = 10"))
+                .hasMessageContaining("Check constraint expression should not contain temporal expression");
+    }
+
+    @Test
+    public void testUpdateUnsupportedLocaltime()
+    {
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_localtime SET nationkey = 10"))
+                .hasMessageContaining("Check constraint expression should not contain temporal expression");
+    }
+
+    @Test
+    public void testUpdateUnsupportedLocaltimestamp()
+    {
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_localtimestamp SET nationkey = 10"))
+                .hasMessageContaining("Check constraint expression should not contain temporal expression");
+    }
+
+    @Test
+    public void testUpdateUnsupportedConstraint()
+    {
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_invalid_function SET nationkey = 10"))
+                .hasMessageContaining("Function 'invalid_function' not registered");
+        assertThatThrownBy(() -> assertions.query("UPDATE mock.tiny.nation_not_boolean_expression SET nationkey = 10"))
+                .hasMessageContaining("to be of type BOOLEAN, but was integer");
+    }
+
+    @Test
+    public void testUpdateNotDeterministic()
+    {
+        assertThatThrownBy(() -> assertions.query("INSERT INTO mock.tiny.nation_not_deterministic VALUES (100, 'POLAND', 0, 'No comment')"))
+                .hasMessageContaining("Check constraint expression should be deterministic");
     }
 
     /**

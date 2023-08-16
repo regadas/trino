@@ -232,7 +232,10 @@ Hive connector documentation.
         `Table Statistics <#table-statistics>`__ for details.
       - ``true``
     * - ``hive.s3select-pushdown.enabled``
-      - Enable query pushdown to AWS S3 Select service.
+      - Enable query pushdown to JSON files using the AWS S3 Select service.
+      - ``false``
+    * - ``hive.s3select-pushdown.experimental-textfile-pushdown-enabled``
+      - Enable query pushdown to TEXTFILE tables using the AWS S3 Select service.
       - ``false``
     * - ``hive.s3select-pushdown.max-connections``
       - Maximum number of simultaneously open connections to S3 for
@@ -262,7 +265,7 @@ Hive connector documentation.
         Hive 3.1+, this must be set to UTC.
       - JVM default
     * - ``hive.timestamp-precision``
-      - Specifies the precision to use for Hive columns of type ``timestamp``.
+      - Specifies the precision to use for Hive columns of type ``TIMESTAMP``.
         Possible values are ``MILLISECONDS``, ``MICROSECONDS`` and ``NANOSECONDS``.
         Values with higher precision than configured are rounded.
       - ``MILLISECONDS``
@@ -470,7 +473,7 @@ properties:
      - Allow the metastore to assume that the values of partition columns can be
        converted to string values. This can lead to performance improvements in
        queries which apply filters on the partition columns. Partition keys with
-       a ``timestamp`` type do not get canonicalized.
+       a ``TIMESTAMP`` type do not get canonicalized.
      - ``false``
    * - ``hive.metastore.thrift.client.socks-proxy``
      - SOCKS proxy to use for the Thrift Hive metastore.
@@ -680,11 +683,11 @@ country, and bucketed by user into ``50`` buckets. Note that Hive
 requires the partition columns to be the last columns in the table::
 
     CREATE TABLE example.web.page_views (
-      view_time timestamp,
-      user_id bigint,
-      page_url varchar,
-      ds date,
-      country varchar
+      view_time TIMESTAMP,
+      user_id BIGINT,
+      page_url VARCHAR,
+      ds DATE,
+      country VARCHAR
     )
     WITH (
       format = 'ORC',
@@ -721,10 +724,10 @@ Create an external Hive table named ``request_logs`` that points at
 existing data in S3::
 
     CREATE TABLE example.web.request_logs (
-      request_time timestamp,
-      url varchar,
-      ip varchar,
-      user_agent varchar
+      request_time TIMESTAMP,
+      url VARCHAR,
+      ip VARCHAR,
+      user_agent VARCHAR
     )
     WITH (
       format = 'TEXTFILE',
@@ -763,7 +766,7 @@ Drop stats for a partition of the ``page_views`` table::
     CALL system.drop_stats(
         schema_name => 'web',
         table_name => 'page_views',
-        partition_values => ARRAY['2016-08-09', 'US']);
+        partition_values => ARRAY[ARRAY['2016-08-09', 'US']]);
 
 .. _hive-procedures:
 
@@ -885,13 +888,13 @@ table. This occurs when the column types of a table are changed after
 partitions already exist (that use the original column types). The Hive
 connector supports this by allowing the same conversions as Hive:
 
-* ``varchar`` to and from ``tinyint``, ``smallint``, ``integer`` and ``bigint``
-* ``real`` to ``double``
-* Widening conversions for integers, such as ``tinyint`` to ``smallint``
+* ``VARCHAR`` to and from ``TINYINT``, ``SMALLINT``, ``INTEGER`` and ``BIGINT``
+* ``REAL`` to ``DOUBLE``
+* Widening conversions for integers, such as ``TINYINT`` to ``SMALLINT``
 
 Any conversion failure results in null, which is the same behavior
 as Hive. For example, converting the string ``'foo'`` to a number,
-or converting the string ``'1234'`` to a ``tinyint`` (which has a
+or converting the string ``'1234'`` to a ``TINYINT`` (which has a
 maximum value of ``127``).
 
 .. _hive-avro-schema:
@@ -927,7 +930,7 @@ The table created in Trino using the ``avro_schema_url`` or
 Example::
 
    CREATE TABLE example.avro.avro_data (
-      id bigint
+      id BIGINT
     )
    WITH (
       format = 'AVRO',
@@ -1155,12 +1158,45 @@ Metadata tables
 
 The raw Hive table properties are available as a hidden table, containing a
 separate column per table property, with a single row containing the property
-values. The properties table name is the same as the table name with
-``$properties`` appended.
+values.
+
+``$properties`` table
+~~~~~~~~~~~~~~~~~~~~~
+
+The properties table name is composed with the table name and ``$properties`` appended.
+It exposes the parameters of the table in the metastore.
 
 You can inspect the property names and values with a simple query::
 
     SELECT * FROM example.web."page_views$properties";
+
+
+.. code-block:: text
+
+            stats_generated_via_stats_task        | auto.purge |       presto_query_id       | presto_version | transactional
+     ---------------------------------------------+------------+-----------------------------+----------------+---------------
+      workaround for potential lack of HIVE-12730 | false      | 20230705_152456_00001_nfugi | 423            | false
+
+``$partitions`` table
+~~~~~~~~~~~~~~~~~~~~~
+
+The ``$partitions`` table provides a list of all partition values
+of a partitioned table.
+
+The following example query returns all partition values from the
+``page_views`` table in the ``web`` schema of the ``example`` catalog::
+
+    SELECT * FROM example.web."page_views$partitions";
+
+.. code-block:: text
+
+          day    | country
+     ------------+---------
+      2023-07-01 | POL
+      2023-07-02 | POL
+      2023-07-03 | POL
+      2023-03-01 | USA
+      2023-03-02 | USA
 
 .. _hive-column-properties:
 
@@ -1630,15 +1666,8 @@ with Parquet files performed by the Hive connector.
         optimized parquet reader by default. The equivalent catalog session
         property is ``parquet_optimized_reader_enabled``.
       - ``true``
-    * - ``parquet.optimized-writer.enabled``
-      - Whether the optimized writer is used when writing Parquet files.
-        Set this property to ``false`` to disable the optimized parquet writer by
-        default. The equivalent catalog session property is
-        ``parquet_optimized_writer_enabled``.
-      - ``true``
-    * - ``parquet.optimized-writer.validation-percentage``
-      - Percentage of parquet files to validate after write by re-reading the whole file
-        when ``parquet.optimized-writer.enabled`` is set to ``true``.
+    * - ``parquet.writer.validation-percentage``
+      - Percentage of Parquet files to validate after write by re-reading the whole file.
         The equivalent catalog session property is ``parquet_optimized_writer_validation_percentage``.
         Validation can be turned off by setting this property to ``0``.
       - ``5``
@@ -1673,13 +1702,13 @@ Hive 3-related limitations
 
 * For security reasons, the ``sys`` system catalog is not accessible.
 
-* Hive's ``timestamp with local zone`` data type is not supported.
-  It is possible to read from a table with a column of this type, but the column
-  data is not accessible. Writing to such a table is not supported.
+* Hive's ``timestamp with local zone`` data type is mapped to
+  ``timestamp with time zone`` with UTC timezone. It only supports reading
+  values - writing to tables with columns of this type is not supported.
 
 * Due to Hive issues `HIVE-21002 <https://issues.apache.org/jira/browse/HIVE-21002>`_
   and `HIVE-22167 <https://issues.apache.org/jira/browse/HIVE-22167>`_, Trino does
-  not correctly read ``timestamp`` values from Parquet, RCBinary, or Avro
+  not correctly read ``TIMESTAMP`` values from Parquet, RCBinary, or Avro
   file formats created by Hive 3.1 or later. When reading from these file formats,
   Trino returns different results than Hive.
 

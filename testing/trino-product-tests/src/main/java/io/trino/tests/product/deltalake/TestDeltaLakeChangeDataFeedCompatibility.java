@@ -15,13 +15,15 @@ package io.trino.tests.product.deltalake;
 
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.google.common.collect.ImmutableList;
 import com.google.inject.Inject;
 import com.google.inject.name.Named;
 import io.trino.tempto.BeforeMethodWithContext;
 import io.trino.tempto.assertions.QueryAssert.Row;
 import io.trino.testng.services.Flaky;
-import org.assertj.core.api.Assertions;
 import org.testng.annotations.Test;
+
+import java.util.List;
 
 import static io.trino.tempto.assertions.QueryAssert.Row.row;
 import static io.trino.tempto.assertions.QueryAssert.assertQueryFailure;
@@ -63,7 +65,7 @@ public class TestDeltaLakeChangeDataFeedCompatibility
             onTrino().executeQuery("CREATE TABLE delta.default." + tableName + " (col1 VARCHAR, updated_column INT) " +
                     "WITH (location = 's3://" + bucketName + "/databricks-compatibility-test-" + tableName + "', change_data_feed_enabled = true)");
 
-            Assertions.assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString()).contains("change_data_feed_enabled = true");
+            assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString()).contains("change_data_feed_enabled = true");
 
             onDelta().executeQuery("INSERT INTO default." + tableName + " VALUES ('testValue1', 1)");
             onDelta().executeQuery("INSERT INTO default." + tableName + " VALUES ('testValue2', 2)");
@@ -86,6 +88,40 @@ public class TestDeltaLakeChangeDataFeedCompatibility
         }
         finally {
             onTrino().executeQuery("DROP TABLE IF EXISTS delta.default." + tableName);
+        }
+    }
+
+    @Test(groups = {DELTA_LAKE_DATABRICKS, DELTA_LAKE_OSS, DELTA_LAKE_EXCLUDE_73, PROFILE_SPECIFIC_TESTS})
+    @Flaky(issue = DATABRICKS_COMMUNICATION_FAILURE_ISSUE, match = DATABRICKS_COMMUNICATION_FAILURE_MATCH)
+    public void testUpdateCdfTableWithNonLowercaseColumn()
+    {
+        String tableName = "test_updates_cdf_with_non_lowercase_" + randomNameSuffix();
+
+        onDelta().executeQuery("CREATE TABLE default." + tableName +
+                "(col1 string, Updated_Column int)" +
+                "USING delta " +
+                "LOCATION 's3://" + bucketName + "/databricks-compatibility-test-" + tableName + "'" +
+                "TBLPROPERTIES ('delta.enableChangeDataFeed' = true)");
+        try {
+            onTrino().executeQuery("INSERT INTO delta.default." + tableName + " VALUES ('testValue1', 1), ('testValue2', 2), ('testValue3', 3)");
+            onTrino().executeQuery("UPDATE delta.default." + tableName + " SET updated_column = 5 WHERE col1 = 'testValue3'");
+
+            List<Row> expectedRows = ImmutableList.<Row>builder()
+                    .add(row("testValue1", 1, "insert", 1L))
+                    .add(row("testValue2", 2, "insert", 1L))
+                    .add(row("testValue3", 3, "insert", 1L))
+                    .add(row("testValue3", 3, "update_preimage", 2L))
+                    .add(row("testValue3", 5, "update_postimage", 2L))
+                    .build();
+            assertThat(onDelta().executeQuery("SELECT col1, updated_column, _change_type, _commit_version " +
+                    "FROM table_changes('default." + tableName + "', 0)"))
+                    .containsOnly(expectedRows);
+            assertThat(onTrino().executeQuery("SELECT col1, updated_column, _change_type, _commit_version " +
+                    "FROM TABLE(delta.system.table_changes('default', '" + tableName + "'))"))
+                    .containsOnly(expectedRows);
+        }
+        finally {
+            dropDeltaTableWithRetry("default." + tableName);
         }
     }
 
@@ -523,7 +559,7 @@ public class TestDeltaLakeChangeDataFeedCompatibility
             onTrino().executeQuery("CREATE TABLE delta.default." + tableName + " (col1 VARCHAR, updated_column INT) " +
                     "WITH (location = 's3://" + bucketName + "/databricks-compatibility-test-" + tableName + "', change_data_feed_enabled = true)");
 
-            Assertions.assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString()).contains("change_data_feed_enabled = true");
+            assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString()).contains("change_data_feed_enabled = true");
 
             onDelta().executeQuery("INSERT INTO default." + tableName + " VALUES ('testValue1', 1)");
             onDelta().executeQuery("UPDATE default." + tableName + " SET updated_column = 10 WHERE col1 = 'testValue1'");
@@ -654,11 +690,11 @@ public class TestDeltaLakeChangeDataFeedCompatibility
                     (tableProperty.isEmpty() ? "" : ", " + tableProperty) + ")");
 
             if (tableProperty.isEmpty()) {
-                Assertions.assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString())
+                assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString())
                         .doesNotContain("change_data_feed_enabled");
             }
             else {
-                Assertions.assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString())
+                assertThat(onTrino().executeQuery("SHOW CREATE TABLE " + tableName).getOnlyValue().toString())
                         .contains(tableProperty);
             }
             onDelta().executeQuery("INSERT INTO default." + tableName + " VALUES ('testValue1', 1)");
@@ -688,6 +724,6 @@ public class TestDeltaLakeChangeDataFeedCompatibility
     {
         String prefix = "databricks-compatibility-test-" + tableName + "/_change_data/";
         ListObjectsV2Result listResult = s3Client.listObjectsV2(bucketName, prefix);
-        Assertions.assertThat(listResult.getObjectSummaries()).isEmpty();
+        assertThat(listResult.getObjectSummaries()).isEmpty();
     }
 }

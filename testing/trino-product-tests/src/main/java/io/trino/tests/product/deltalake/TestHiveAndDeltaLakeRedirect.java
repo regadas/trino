@@ -19,7 +19,6 @@ import io.trino.tempto.query.QueryExecutionException;
 import io.trino.tempto.query.QueryResult;
 import io.trino.testng.services.Flaky;
 import org.assertj.core.api.AbstractStringAssert;
-import org.assertj.core.api.Assertions;
 import org.assertj.core.api.Condition;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.DataProvider;
@@ -877,6 +876,30 @@ public class TestHiveAndDeltaLakeRedirect
         }
     }
 
+    @Test(groups = {DELTA_LAKE_DATABRICKS, DELTA_LAKE_OSS, PROFILE_SPECIFIC_TESTS})
+    @Flaky(issue = DATABRICKS_COMMUNICATION_FAILURE_ISSUE, match = DATABRICKS_COMMUNICATION_FAILURE_MATCH)
+    public void testHiveToDeltaPropertiesRedirect()
+    {
+        String tableName = "test_redirect_to_delta_properties_" + randomNameSuffix();
+
+        onDelta().executeQuery("" +
+                "CREATE TABLE " + tableName + " USING DELTA " +
+                "LOCATION '" + locationForTable(tableName) + "' " +
+                " AS SELECT true AS a_boolean");
+
+        List<Row> expected = List.of(
+                row("delta.minReaderVersion", "1"),
+                row("delta.minWriterVersion", "2"));
+
+        try {
+            assertThat(onTrino().executeQuery(format("SELECT * FROM delta.default.\"%s$properties\"", tableName))).containsOnly(expected);
+            assertThat(onTrino().executeQuery(format("SELECT * FROM hive.default.\"%s$properties\"", tableName))).containsOnly(expected);
+        }
+        finally {
+            dropDeltaTableWithRetry("default." + tableName);
+        }
+    }
+
     @DataProvider
     public Object[][] trueFalse()
     {
@@ -926,7 +949,7 @@ public class TestHiveAndDeltaLakeRedirect
 
     private static AbstractStringAssert<?> assertTableComment(String catalog, String schema, String tableName)
     {
-        return Assertions.assertThat((String) readTableComment(catalog, schema, tableName).getOnlyValue());
+        return assertThat((String) readTableComment(catalog, schema, tableName).getOnlyValue());
     }
 
     private static QueryResult readTableComment(String catalog, String schema, String tableName)
@@ -940,7 +963,7 @@ public class TestHiveAndDeltaLakeRedirect
 
     private static AbstractStringAssert<?> assertColumnComment(String catalog, String schema, String tableName, String columnName)
     {
-        return Assertions.assertThat((String) readColumnComment(catalog, schema, tableName, columnName).getOnlyValue());
+        return assertThat((String) readColumnComment(catalog, schema, tableName, columnName).getOnlyValue());
     }
 
     private static QueryResult readColumnComment(String catalog, String schema, String tableName, String columnName)
