@@ -69,6 +69,7 @@ import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_AMBIGUOUS_OBJE
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_FAILED_TO_EXECUTE_QUERY;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_INVALID_STATEMENT;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_LISTING_DATASET_ERROR;
+import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_LISTING_TABLE_ERROR;
 import static io.trino.plugin.bigquery.BigQuerySessionProperties.createDisposition;
 import static io.trino.plugin.bigquery.BigQuerySessionProperties.isQueryResultsCacheEnabled;
 import static java.lang.String.format;
@@ -88,6 +89,7 @@ public class BigQueryClient
     private final ViewMaterializationCache materializationCache;
     private final boolean caseInsensitiveNameMatching;
     private final LoadingCache<String, List<Dataset>> remoteDatasetCache;
+    private final LoadingCache<DatasetId, List<Table>> remoteTableCache;
     private final Optional<String> configProjectId;
 
     public BigQueryClient(
@@ -106,6 +108,10 @@ public class BigQueryClient
                 .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
                 .shareNothingWhenDisabled()
                 .build(CacheLoader.from(this::listDatasetsFromBigQuery));
+        this.remoteTableCache = EvictableCacheBuilder.newBuilder()
+                .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
+                .shareNothingWhenDisabled()
+                .build(CacheLoader.from(this::listTablesFromBigQuery));
         this.configProjectId = requireNonNull(configProjectId, "projectId is null");
     }
 
@@ -235,6 +241,16 @@ public class BigQueryClient
     }
 
     public Iterable<Table> listTables(DatasetId remoteDatasetId)
+    {
+        try {
+            return remoteTableCache.get(remoteDatasetId);
+        }
+        catch (ExecutionException e) {
+            throw new TrinoException(BIGQUERY_LISTING_TABLE_ERROR, "Failed to retrieve tables from BigQuery", e);
+        }
+    }
+
+    private List<Table> listTablesFromBigQuery(DatasetId remoteDatasetId)
     {
         Iterable<Table> allTables = bigQuery.listTables(remoteDatasetId).iterateAll();
         return stream(allTables)
