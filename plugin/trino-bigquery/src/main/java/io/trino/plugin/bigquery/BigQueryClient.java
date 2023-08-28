@@ -90,8 +90,8 @@ public class BigQueryClient
     private final ViewMaterializationCache materializationCache;
     private final boolean caseInsensitiveNameMatching;
     private final LoadingCache<String, List<Dataset>> remoteDatasetCache;
-    private final LoadingCache<DatasetId, List<Table>> remoteTableCache;
-    private final LoadingCache<TableId, TableInfo> remoteTableInfoCache;
+    private final LoadingCache<DatasetId, List<Table>> remoteDatasetTableCache;
+    private final LoadingCache<TableId, TableInfo> remoteTableCache;
     private final Optional<String> configProjectId;
 
     public BigQueryClient(
@@ -110,11 +110,11 @@ public class BigQueryClient
                 .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
                 .shareNothingWhenDisabled()
                 .build(CacheLoader.from(this::listDatasetsFromBigQuery));
-        this.remoteTableCache = EvictableCacheBuilder.newBuilder()
+        this.remoteDatasetTableCache = EvictableCacheBuilder.newBuilder()
                 .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
                 .shareNothingWhenDisabled()
                 .build(CacheLoader.from(this::listTablesFromBigQuery));
-        this.remoteTableInfoCache = EvictableCacheBuilder.newBuilder()
+        this.remoteTableCache = EvictableCacheBuilder.newBuilder()
                 .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
                 .shareNothingWhenDisabled()
                 .build(CacheLoader.from(this::getTableFromBigQuery));
@@ -202,7 +202,7 @@ public class BigQueryClient
     public Optional<TableInfo> getTable(TableId remoteTableId)
     {
         try {
-            return Optional.ofNullable(remoteTableInfoCache.get(remoteTableId));
+            return Optional.ofNullable(remoteTableCache.get(remoteTableId));
         }
         catch (ExecutionException e) {
             throw new TrinoException(BIGQUERY_GET_TABLE_ERROR, "Failed to retrieve table from BigQuery", e);
@@ -259,7 +259,7 @@ public class BigQueryClient
     public Iterable<Table> listTables(DatasetId remoteDatasetId)
     {
         try {
-            return remoteTableCache.get(remoteDatasetId);
+            return remoteDatasetTableCache.get(remoteDatasetId);
         }
         catch (ExecutionException e) {
             throw new TrinoException(BIGQUERY_LISTING_TABLE_ERROR, "Failed to retrieve tables from BigQuery", e);
