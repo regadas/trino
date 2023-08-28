@@ -67,6 +67,7 @@ import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Streams.stream;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_AMBIGUOUS_OBJECT_NAME;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_FAILED_TO_EXECUTE_QUERY;
+import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_GET_TABLE_ERROR;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_INVALID_STATEMENT;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_LISTING_DATASET_ERROR;
 import static io.trino.plugin.bigquery.BigQueryErrorCode.BIGQUERY_LISTING_TABLE_ERROR;
@@ -90,6 +91,7 @@ public class BigQueryClient
     private final boolean caseInsensitiveNameMatching;
     private final LoadingCache<String, List<Dataset>> remoteDatasetCache;
     private final LoadingCache<DatasetId, List<Table>> remoteTableCache;
+    private final LoadingCache<TableId, TableInfo> remoteTableInfoCache;
     private final Optional<String> configProjectId;
 
     public BigQueryClient(
@@ -112,6 +114,10 @@ public class BigQueryClient
                 .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
                 .shareNothingWhenDisabled()
                 .build(CacheLoader.from(this::listTablesFromBigQuery));
+        this.remoteTableInfoCache = EvictableCacheBuilder.newBuilder()
+                .expireAfterWrite(metadataCacheTtl.toMillis(), MILLISECONDS)
+                .shareNothingWhenDisabled()
+                .build(CacheLoader.from(this::getTableFromBigQuery));
         this.configProjectId = requireNonNull(configProjectId, "projectId is null");
     }
 
@@ -195,7 +201,17 @@ public class BigQueryClient
 
     public Optional<TableInfo> getTable(TableId remoteTableId)
     {
-        return Optional.ofNullable(bigQuery.getTable(remoteTableId));
+        try {
+            return Optional.ofNullable(remoteTableInfoCache.get(remoteTableId));
+        }
+        catch (ExecutionException e) {
+            throw new TrinoException(BIGQUERY_GET_TABLE_ERROR, "Failed to retrieve table from BigQuery", e);
+        }
+    }
+
+    public TableInfo getTableFromBigQuery(TableId remoteTableId)
+    {
+        return bigQuery.getTable(remoteTableId);
     }
 
     public TableInfo getCachedTable(Duration viewExpiration, TableInfo remoteTableId, List<String> requiredColumns)
